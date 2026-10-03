@@ -38,6 +38,16 @@ pip install -e .        # makes `support_desk` importable from scripts/ and eval
 cp .env.example .env    # then put your real key in .env (never commit it)
 ```
 
+## Gemini API key
+
+The key is read from the `GEMINI_API_KEY` environment variable. Load it from
+`.env` into your shell, then check that it works with one model call:
+
+```bash
+set -a; source .env; set +a
+python scripts/check_key.py
+```
+
 ## Running tests
 
 ```bash
