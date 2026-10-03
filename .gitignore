@@ -4,9 +4,18 @@
 # Secrets (never commit real API keys)
 .env
 
+# Generated at runtime: SQLite database and run traces (folders are kept via .gitkeep)
+data/*
+!data/.gitkeep
+traces/*
+!traces/.gitkeep
+
 # Python bytecode
 __pycache__/
 *.py[cod]
+
+# Packaging metadata created by `pip install -e .`
+*.egg-info/
 
 # Test and coverage output
 .pytest_cache/

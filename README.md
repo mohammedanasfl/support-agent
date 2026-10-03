@@ -7,13 +7,35 @@ CrewAI, smolagents, Agents SDK).
 
 > Status: project skeleton only. No agent logic is implemented yet.
 
+## Project layout
+
+```
+src/support_desk/   The agent package
+  main.py           Command-line entry point
+  config.py         API key from the environment, model name, run limits
+  agent.py          The hand-written agent loop
+  tools.py          All tools (four read tools, send_reply, escalate)
+  guardrails.py     Code-enforced caps and the human approval gate
+  context.py        Message-history compaction
+  tracing.py        One JSON trace per run
+  db.py             SQLite access
+prompts/            System prompt, kept in its own file
+scripts/            seed.py, check_key.py, view_trace.py
+evals/              Eval test cases and runner
+docs/               Tool description note, injection notes, eval results
+data/               SQLite database (generated, not committed)
+traces/             Run traces (generated, not committed)
+tests/              pytest unit tests
+```
+
 ## Setup
 
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # then put your real key in .env (never commit it)
+pip install -e .        # makes `support_desk` importable from scripts/ and evals/
+cp .env.example .env    # then put your real key in .env (never commit it)
 ```
 
 ## Running tests

@@ -1,1 +1,1 @@
-"""Configuration loading from environment variables. Not implemented yet."""
+"""Configuration: API key from the environment, model name, and run limits. Not implemented yet."""
