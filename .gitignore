@@ -1,0 +1,25 @@
+# Virtual environment
+.venv/
+
+# Secrets (never commit real API keys)
+.env
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Test and coverage output
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# IDE / editor files
+.vscode/
+.idea/
+*.swp
+
+# OS-specific files
+.DS_Store
+Thumbs.db
