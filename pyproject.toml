@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "support-desk-triage-agent"
 version = "0.1.0"
-description = "A support desk triage agent built on the Gemini API without agent frameworks."
+description = "A support desk triage agent built on the Groq API without agent frameworks."
 requires-python = ">=3.11"
 
 [tool.setuptools.packages.find]

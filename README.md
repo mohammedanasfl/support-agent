@@ -1,11 +1,11 @@
 # Support Desk Triage Agent
 
-A Python 3.11+ capstone project: a support desk triage agent that uses the
-Google Gemini API for model calls. The agent loop, tool dispatch, and message
-history are written by hand — no agent frameworks (LangChain, LangGraph,
-CrewAI, smolagents, Agents SDK).
+A Python 3.11+ capstone project: a support desk triage agent that uses Groq
+(model `qwen/qwen3.8-27b`) for model calls. The agent loop, tool dispatch, and
+message history are written by hand — no agent frameworks (LangChain,
+LangGraph, CrewAI, smolagents, Agents SDK).
 
-> Status: project skeleton only. No agent logic is implemented yet.
+> Status: Part 1 (data and setup) and Part 2 (the loop) are done.
 
 ## Project layout
 
@@ -38,15 +38,26 @@ pip install -e .        # makes `support_desk` importable from scripts/ and eval
 cp .env.example .env    # then put your real key in .env (never commit it)
 ```
 
-## Gemini API key
+## Groq API key
 
-The key is read from the `GEMINI_API_KEY` environment variable. Load it from
+The key is read from the `GROQ_API_KEY` environment variable. Load it from
 `.env` into your shell, then check that it works with one model call:
 
 ```bash
 set -a; source .env; set +a
 python scripts/check_key.py
 ```
+
+## Running the agent
+
+```bash
+python scripts/seed.py           # build the database
+python -m support_desk.main      # run the agent on the GOAL set in main.py
+```
+
+To change the task, edit `GOAL` in `src/support_desk/main.py` (set it to
+`IMPOSSIBLE_GOAL` to see the iteration cap stop a run). To try the limits,
+edit `MAX_ITERATIONS` or `MAX_TOTAL_TOKENS` in `src/support_desk/config.py`.
 
 ## Running tests
 
