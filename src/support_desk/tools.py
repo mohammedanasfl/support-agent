@@ -124,6 +124,15 @@ def get_ticket(ticket_id):
 
     The full body is returned (no snippet), because reading the whole ticket is
     the reason to call this tool.
+
+    Why the description is worded this way:
+    - "numeric id" and "e.g. 12" show the exact form of the id, so the model
+      sends 12 and not "#12" or "ticket 12".
+    - It lists everything that comes back, including the customer's id and
+      plan. The model then knows it already has what get_customer_history and
+      get_refund_policy need, and does not have to guess them.
+    - It says an unknown id gives an error message, so the model expects that
+      case and can correct the id instead of stopping.
     """
     if not is_whole_number(ticket_id):
         return f"Error: ticket_id must be a whole number, e.g. 12. Got {ticket_id!r}."
@@ -174,6 +183,20 @@ def search_tickets(query, category=None):
     At most MAX_SEARCH_RESULTS tickets are returned, newest first, each with a
     short snippet of its body instead of the full body. total_matches and shown
     tell the model when some matches were left out.
+
+    Why the description is worded this way (this is the description I rewrote,
+    see docs/tool-description-note.md):
+    - It explains that the query is matched as ONE exact piece of text, with an
+      example of a search that finds nothing. The first, short description
+      did not say this, and the model searched with whole phrases such as
+      "Safari dashboard blank", which missed the earlier ticket.
+    - It says to retry with a single different word when nothing is found,
+      which is the step the model most often skipped.
+    - It says results are limited to 5 snippets plus total_matches and shown,
+      so the model knows a result may be incomplete and that get_ticket gives
+      the full text.
+    - category is described as "Optional ... leave it out", so the model does
+      not feel it must pick one; a wrong category would hide relevant tickets.
     """
     if not isinstance(query, str):
         return f"Error: query must be text, e.g. \"refund\". Got {query!r}."
@@ -262,6 +285,16 @@ def get_customer_history(customer_id):
     MAX_HISTORY_ROWS are returned, with each summary cut to a snippet, plus the
     total count. A customer with no history gets an empty list and a note:
     that is not an error, the customer simply has no resolved tickets yet.
+
+    Why the description is worded this way:
+    - "Use it to check whether the customer has had the same problem before"
+      tells the model WHEN the tool is useful, not only what it returns.
+    - "The customer id is in get_ticket's result" matters because ticket ids
+      and customer ids are both small numbers that overlap (ticket 5 and
+      customer 5 both exist). If the model passed a ticket id by mistake, it
+      would get the wrong customer's history and no error to warn it.
+    - It says an empty history means "no resolved tickets yet", so the model
+      treats it as an answer and does not keep retrying.
     """
     if not is_whole_number(customer_id):
         return f"Error: customer_id must be a whole number, e.g. 5. Got {customer_id!r}."
@@ -325,6 +358,14 @@ def get_refund_policy(plan):
 
     The rules come from the REFUND_POLICIES dictionary above, not from the
     database, because they are fixed text that never changes during a run.
+
+    Why the description is worded this way:
+    - "Use the plan stored in our records, as shown by get_ticket or
+      get_customer_history" is there because customers are not always right
+      about their own plan (ticket 13 says "I don't think I ever upgraded").
+      The policy must be chosen from the database, not from the ticket text.
+    - The enum lists the three exact plan names, so the model sends "pro",
+      not "Pro" or "premium", which the code would reject.
     """
     # Check for text first: a list such as ["pro"] cannot be looked up in a
     # dictionary and would raise a TypeError.
@@ -345,6 +386,17 @@ def send_reply(ticket_id, message):
 
     This is the only tool that changes data. Human approval before it runs
     belongs to Part 5; this function only checks its arguments and writes.
+
+    Why the description is worded this way:
+    - It says what calling it changes (the reply is recorded and the status
+      becomes 'replied'), because this is the only tool with an effect. The
+      model should not treat it like a harmless lookup.
+    - "Write the complete text the customer will read" stops the model from
+      passing a note to itself, such as "tell them how to reset".
+    - It states the 2000-character limit and that closed tickets cannot get
+      replies, so the model avoids calls that would only return an error.
+    - "Only call this after reading the ticket and checking what to say"
+      asks the model to look things up first and reply last.
     """
     if not is_whole_number(ticket_id):
         return f"Error: ticket_id must be a whole number, e.g. 12. Got {ticket_id!r}."
