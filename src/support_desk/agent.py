@@ -9,6 +9,10 @@ run_agent() works like this:
         add the model's reply to messages
         if the model did not ask for a tool -> stop: that reply is the final answer
         otherwise run the tool ourselves and add the result to messages
+        (send_reply and escalate only run if a human approves them,
+         and a successful escalate ends the run)
+        (a tool that was already called max_tool_calls times is not run;
+         the model gets an error message instead)
 
 The model never runs our code. It can only ASK for a tool by name. Our Python
 code decides which function to run, runs it, and decides when to stop.
@@ -22,6 +26,13 @@ Every message is a plain Python dictionary with a "role":
 
 import json
 
+from support_desk.guardrails import (
+    ESCALATION_REJECTION_MESSAGE,
+    REJECTION_MESSAGE,
+    ask_human_to_approve_escalation,
+    ask_human_to_approve_reply,
+    make_tool_limit_message,
+)
 from support_desk.tools import TOOL_DECLARATIONS, TOOL_FUNCTIONS
 
 
@@ -50,6 +61,81 @@ def run_tool(tool_name, arguments_json):
         return tool_function(**tool_args)
     except TypeError as error:
         return f"Error: wrong arguments for {tool_name}: {error}"
+
+
+def run_send_reply_with_approval(arguments_json, input_function):
+    """Run send_reply only if a human approves the proposed reply.
+
+    send_reply is the only tool that changes data, so the model's request is
+    treated as a PROPOSAL. A person sees the ticket id and the message and
+    answers yes or no:
+      - yes: run_tool runs the real send_reply, and its result is returned.
+      - no:  send_reply is never called, so nothing is saved, and the model
+             gets REJECTION_MESSAGE as the tool result so it can revise.
+
+    The check is here in Python code, so the model cannot skip it, whatever
+    the prompt or a ticket says.
+    """
+    # We need the ticket id and message to show the human, so we read the
+    # arguments here. If they cannot be read, there is nothing to show, and
+    # send_reply is not run either.
+    try:
+        tool_args = json.loads(arguments_json)
+    except json.JSONDecodeError:
+        return f"Error: the arguments for send_reply are not valid JSON: {arguments_json}"
+    if not isinstance(tool_args, dict):
+        return f"Error: the arguments for send_reply must be a JSON object. Got {arguments_json}"
+
+    # .get() returns None instead of crashing when the model left an argument
+    # out. The human then sees "None" and can reject.
+    ticket_id = tool_args.get("ticket_id")
+    message = tool_args.get("message")
+
+    approved = ask_human_to_approve_reply(ticket_id, message, input_function)
+
+    if not approved:
+        print("[approval] rejected: send_reply was NOT run")
+        return REJECTION_MESSAGE
+
+    print("[approval] approved: running send_reply")
+    return run_tool("send_reply", arguments_json)
+
+
+def run_escalate_with_approval(arguments_json, input_function):
+    """Run escalate only if a human approves it.
+
+    Works like run_send_reply_with_approval, but returns TWO values:
+        result     the text that goes back to the model as the tool result
+        escalated  True only if the ticket really was escalated
+
+    The loop needs the second value because a successful escalation ends the
+    run, while a rejection or an error does not.
+    """
+    # Read the arguments so we can show them to the human.
+    try:
+        tool_args = json.loads(arguments_json)
+    except json.JSONDecodeError:
+        return f"Error: the arguments for escalate are not valid JSON: {arguments_json}", False
+    if not isinstance(tool_args, dict):
+        return f"Error: the arguments for escalate must be a JSON object. Got {arguments_json}", False
+
+    ticket_id = tool_args.get("ticket_id")
+    reason = tool_args.get("reason")
+
+    approved = ask_human_to_approve_escalation(ticket_id, reason, input_function)
+
+    if not approved:
+        print("[approval] rejected: escalate was NOT run")
+        return ESCALATION_REJECTION_MESSAGE, False
+
+    print("[approval] approved: running escalate")
+    result = run_tool("escalate", arguments_json)
+
+    # Every tool and run_tool start their error messages with "Error:". So if
+    # the result does not, the escalation succeeded.
+    if result.startswith("Error:"):
+        return result, False
+    return result, True
 
 
 def get_call_tokens(response):
@@ -136,7 +222,8 @@ def make_result(stop_reason, final_text, iterations, total_tokens, messages):
     """Collect everything about how a run ended into one dictionary."""
     return {
         "stop_reason": stop_reason,  # why the loop stopped
-        "final_text": final_text,  # the model's answer, or None if it never gave one
+        "final_text": final_text,  # the model's answer, the escalation result,
+                                   # why a limit stopped the run, or None
         "iterations": iterations,  # how many times we called the model
         "total_tokens": total_tokens,  # tokens used, added up over all calls
         "messages": messages,  # the complete history of the run
@@ -150,10 +237,22 @@ def run_agent(
     system_prompt,
     max_iterations,
     max_total_tokens,
+    max_tool_calls,
     context_message_threshold,
     context_keep_exchanges,
+    input_function=input,
 ):
-    """Run the agent loop on one goal and return a result dictionary."""
+    """Run the agent loop on one goal and return a result dictionary.
+
+    The three hard limits are checked here in Python, so the model cannot
+    talk its way past them:
+        max_iterations    the most model calls in one run
+        max_total_tokens  the most tokens in one run, added up over all calls
+        max_tool_calls    the most times EACH tool may be called in one run
+
+    input_function reads the human's answer when send_reply or escalate needs
+    approval. It is Python's built-in input() unless a test passes a fake one.
+    """
 
     # The ONE message list for the whole run. It starts with the system
     # prompt and the user's goal. Every model reply and every tool result is
@@ -166,6 +265,12 @@ def run_agent(
     ]
 
     total_tokens = 0
+
+    # How many times each tool has been called in this run, by tool name, for
+    # example {"get_ticket": 2, "search_tickets": 1}. A tool that has not been
+    # called yet is simply not in the dictionary. Each tool has its own count,
+    # so reaching the limit for one tool does not block the others.
+    tool_call_counts = {}
 
     for iteration in range(1, max_iterations + 1):
 
@@ -229,15 +334,50 @@ def run_agent(
         # This check comes after the final-answer check, so a finished answer is
         # kept even if it went over budget, and before running the tools,
         # because no further model call would read their results.
+        # The API only reports tokens AFTER a call, so the total can go a bit
+        # over the limit on the last call. We keep the real total; we never
+        # cut it down to the limit.
         if total_tokens >= max_total_tokens:
-            print(f"[iter {iteration}] token budget of {max_total_tokens} reached")
-            return make_result("token_budget", None, iteration, total_tokens, messages)
+            explanation = (
+                f"Stopped: the token limit of {max_total_tokens} was reached "
+                f"({total_tokens} tokens used) before the model gave a final answer."
+            )
+            print(f"[iter {iteration}] {explanation}")
+            return make_result("token_budget", explanation, iteration, total_tokens, messages)
 
         # Step 7: run each requested tool ourselves, and add each result to the
         # history as its own "tool" message. tool_call_id tells the model which
         # of its requests this result answers.
+        # First the per-tool limit is checked: a tool that already reached it
+        # is not run at all, so not even a human is asked. Otherwise,
+        # send_reply and escalate change data, so they go through a human
+        # approval gate instead of being run directly. The other tools only
+        # read data.
         for tool_call in tool_calls:
-            result = run_tool(tool_call.function.name, tool_call.function.arguments)
+            tool_name = tool_call.function.name
+            escalated = False
+
+            # .get(tool_name, 0) gives 0 for a tool that was not called yet.
+            calls_so_far = tool_call_counts.get(tool_name, 0)
+
+            if calls_so_far >= max_tool_calls:
+                # The model still gets a tool message for this request (the API
+                # needs a result for every request), but the tool is not run.
+                print(f"[iter {iteration}] {tool_name} limit of {max_tool_calls} calls reached, NOT run")
+                result = make_tool_limit_message(tool_name, max_tool_calls)
+            else:
+                # Count the call before running it. Every request that gets
+                # past the limit counts, also one the human rejects, so the
+                # human is asked at most max_tool_calls times per tool.
+                tool_call_counts[tool_name] = calls_so_far + 1
+
+                if tool_name == "send_reply":
+                    result = run_send_reply_with_approval(tool_call.function.arguments, input_function)
+                elif tool_name == "escalate":
+                    result, escalated = run_escalate_with_approval(tool_call.function.arguments, input_function)
+                else:
+                    result = run_tool(tool_name, tool_call.function.arguments)
+
             tool_message = {
                 "role": "tool",
                 "tool_call_id": tool_call.id,
@@ -245,8 +385,22 @@ def run_agent(
             }
             messages.append(tool_message)
 
+            # Step 8: a successful escalation hands the ticket to a person, so
+            # the run ends here, straight after recording the result. The
+            # model is not called again, and any later tool requests in this
+            # same reply are not run.
+            if escalated:
+                print(f"[iter {iteration}] ticket escalated, stopping the run")
+                return make_result("escalated", result, iteration, total_tokens, messages)
+
         # The loop now goes round, and the model is called again with everything.
 
-    # The for loop finished without a final answer: the iteration cap was reached.
-    print(f"Iteration cap of {max_iterations} reached")
-    return make_result("max_iterations", None, max_iterations, total_tokens, messages)
+    # The for loop finished without a final answer: the iteration cap was
+    # reached. range(1, max_iterations + 1) ran exactly max_iterations times,
+    # so exactly max_iterations model calls were made, never one more.
+    explanation = (
+        f"Stopped: the iteration limit of {max_iterations} model calls was "
+        f"reached before the model gave a final answer."
+    )
+    print(explanation)
+    return make_result("max_iterations", explanation, max_iterations, total_tokens, messages)

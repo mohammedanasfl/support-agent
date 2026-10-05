@@ -1,11 +1,15 @@
 """Tools the agent can ask for.
 
-There are five tools:
+There are six tools:
     get_ticket            read one ticket and the customer who sent it
     search_tickets        find tickets by keyword, optionally in one category
     get_customer_history  read a customer's past resolved tickets
     get_refund_policy     read the refund rules for one plan
-    send_reply            record a reply to a ticket (the only tool that writes)
+    send_reply            record a reply to a ticket (changes data)
+    escalate              hand a ticket to the human support queue (changes data)
+
+The two tools that change data are only run after a human approves them; that
+check lives in agent.py and guardrails.py, not here.
 
 Every tool has two halves:
   1. A Python function that our loop runs.
@@ -37,6 +41,7 @@ MAX_HISTORY_ROWS = 5  # the most past tickets get_customer_history returns
 SNIPPET_LENGTH = 200  # longer ticket bodies and summaries are cut to this length
 MAX_QUERY_LENGTH = 100  # the longest search text search_tickets accepts
 MAX_REPLY_LENGTH = 2000  # the longest reply send_reply accepts
+MAX_REASON_LENGTH = 500  # the longest escalation reason escalate accepts
 
 # The database has no category column, because deciding what kind of problem a
 # ticket is, is the agent's job. So search_tickets filters by category with
@@ -126,8 +131,12 @@ def get_ticket(ticket_id):
     the reason to call this tool.
 
     Why the description is worded this way:
-    - "numeric id" and "e.g. 12" show the exact form of the id, so the model
-      sends 12 and not "#12" or "ticket 12".
+    - "numeric id" and "as a number" show the exact form of the id, so the
+      model sends 12 and not "#12" or "ticket 12".
+    - The ticket_id description deliberately gives NO example id. It used to
+      say "e.g. 12", and for a task that named no ticket at all ("Please refund
+      the charge immediately.") the model called get_ticket(12). It now says
+      never to guess an id.
     - It lists everything that comes back, including the customer's id and
       plan. The model then knows it already has what get_customer_history and
       get_refund_policy need, and does not have to guess them.
@@ -384,19 +393,22 @@ def send_reply(ticket_id, message):
     The reply is saved and the status changed in one transaction, so the
     database never ends up with one change and not the other.
 
-    This is the only tool that changes data. Human approval before it runs
-    belongs to Part 5; this function only checks its arguments and writes.
+    This tool changes data (so does escalate). Human approval before it runs
+    is handled in agent.py; this function only checks its arguments and writes.
 
     Why the description is worded this way:
     - It says what calling it changes (the reply is recorded and the status
-      becomes 'replied'), because this is the only tool with an effect. The
-      model should not treat it like a harmless lookup.
+      becomes 'replied'), because unlike the lookup tools it has an effect.
+      The model should not treat it like a harmless lookup.
     - "Write the complete text the customer will read" stops the model from
       passing a note to itself, such as "tell them how to reset".
     - It states the 2000-character limit and that closed tickets cannot get
       replies, so the model avoids calls that would only return an error.
     - "Only call this after reading the ticket and checking what to say"
       asks the model to look things up first and reply last.
+    - The ticket_id description says to use the ticket the task names and
+      never one from search results, with no example id to copy. A reply
+      sent to the wrong ticket goes to the wrong customer.
     """
     if not is_whole_number(ticket_id):
         return f"Error: ticket_id must be a whole number, e.g. 12. Got {ticket_id!r}."
@@ -446,6 +458,75 @@ def send_reply(ticket_id, message):
     })
 
 
+def escalate(ticket_id, reason):
+    """Hand a ticket to the human support queue, and record why.
+
+    The ticket's status becomes 'escalated' (which means "in the human support
+    queue"), and the reason is saved in the escalations table. Both changes
+    happen in one transaction, like send_reply. The rest of the ticket
+    (subject, body, customer) is not changed.
+
+    After a successful escalation the agent run ends (see agent.py): the
+    ticket now belongs to a person. Human approval before this runs is
+    handled in agent.py; this function only checks its arguments and writes.
+
+    Why the description is worded this way:
+    - It says WHEN to use the tool (the ticket needs a person: a decision,
+      an action the tools cannot do, or not enough evidence), not just what
+      it does, so the model does not escalate easy tickets.
+    - It says the run ends afterwards, so the model does everything else it
+      needs to do (for example, a reply) BEFORE it escalates.
+    - It asks for a reason that explains why human review is needed, because
+      that reason is what the person picking the ticket up will read.
+    - The ticket_id description says to use the ticket the task names and
+      never one from search results, with no example id to copy, for the same
+      reason as send_reply: escalating the wrong ticket acts on the wrong
+      customer.
+    """
+    if not is_whole_number(ticket_id):
+        return f"Error: ticket_id must be a whole number, e.g. 12. Got {ticket_id!r}."
+    if not isinstance(reason, str):
+        return f"Error: reason must be text. Got {reason!r}."
+    reason = reason.strip()
+    if reason == "":
+        return "Error: reason must not be empty. Explain why a human needs to review this ticket."
+    if len(reason) > MAX_REASON_LENGTH:
+        return (
+            f"Error: reason is too long ({len(reason)} characters, the limit is "
+            f"{MAX_REASON_LENGTH}). Keep it short."
+        )
+
+    conn = open_database()
+    try:
+        ticket_row = conn.execute(
+            "SELECT status FROM tickets WHERE id = ?", (ticket_id,)
+        ).fetchone()
+        if ticket_row is None:
+            return f"Error: no ticket with id {ticket_id}. Check the id and try again."
+        if ticket_row["status"] == "closed":
+            return f"Error: ticket {ticket_id} is closed, so it cannot be escalated."
+        if ticket_row["status"] == "escalated":
+            return f"Error: ticket {ticket_id} is already in the human support queue."
+
+        # ISO 8601 text, e.g. '2026-10-04T14:05:00', like every other date we store.
+        escalated_at = datetime.now().isoformat(timespec="seconds")
+
+        # "with conn:" is one transaction: if either statement fails, neither
+        # change is saved. If both succeed, both are saved together.
+        with conn:
+            conn.execute(
+                "INSERT INTO escalations (ticket_id, reason, escalated_at) VALUES (?, ?, ?)",
+                (ticket_id, reason, escalated_at),
+            )
+            conn.execute(
+                "UPDATE tickets SET status = 'escalated' WHERE id = ?", (ticket_id,)
+            )
+    finally:
+        conn.close()
+
+    return f"Ticket {ticket_id} escalated to the human support queue."
+
+
 # ---------- What the model is told about each tool ----------
 # The model only ever sees these declarations, never the Python functions.
 # "parameters" is a JSON Schema describing the arguments the tool accepts.
@@ -467,7 +548,10 @@ TOOL_DECLARATIONS = [
                 "properties": {
                     "ticket_id": {
                         "type": "integer",
-                        "description": "The ticket id, e.g. 12.",
+                        "description": (
+                            "The ticket id, as a number. Only an id the user's task "
+                            "states or a tool returned; never guess one."
+                        ),
                     },
                 },
                 "required": ["ticket_id"],
@@ -578,7 +662,10 @@ TOOL_DECLARATIONS = [
                 "properties": {
                     "ticket_id": {
                         "type": "integer",
-                        "description": "The id of the ticket to reply to, e.g. 12.",
+                        "description": (
+                            "The id of the ticket the user's task names, as a number. "
+                            "Never guess an id or take one from search results."
+                        ),
                     },
                     "message": {
                         "type": "string",
@@ -586,6 +673,43 @@ TOOL_DECLARATIONS = [
                     },
                 },
                 "required": ["ticket_id", "message"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "escalate",
+            "description": (
+                "Assign a ticket to the human support queue. Use it when the issue "
+                "needs human intervention: a refund, credit or account decision a "
+                "person must make, a request involving someone else's account, an "
+                "action the other tools cannot do, or not enough evidence to decide. "
+                "Do not use it for tickets you can triage yourself. The agent run "
+                "ends after a successful escalation, so do anything else first. "
+                "Returns a confirmation, or an error message (for example, if the "
+                "ticket is closed or already escalated)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ticket_id": {
+                        "type": "integer",
+                        "description": (
+                            "The id of the ticket the user's task names, as a number. "
+                            "Never guess an id or take one from search results."
+                        ),
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": (
+                            "Why human review is needed, in one or two sentences "
+                            "(at most 500 characters). The person who picks up the "
+                            "ticket reads this."
+                        ),
+                    },
+                },
+                "required": ["ticket_id", "reason"],
             },
         },
     },
@@ -598,4 +722,5 @@ TOOL_FUNCTIONS = {
     "get_customer_history": get_customer_history,
     "get_refund_policy": get_refund_policy,
     "send_reply": send_reply,
+    "escalate": escalate,
 }

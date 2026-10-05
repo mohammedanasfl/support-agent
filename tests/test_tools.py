@@ -273,7 +273,7 @@ def test_declarations_and_functions_have_the_same_tools():
     for declaration in tools.TOOL_DECLARATIONS:
         declared_names.append(declaration["function"]["name"])
     assert sorted(declared_names) == sorted(tools.TOOL_FUNCTIONS.keys())
-    assert len(declared_names) == 5
+    assert len(declared_names) == 6
 
 
 def test_every_declaration_has_description_schema_and_required():
@@ -303,3 +303,68 @@ def test_enums_match_the_values_the_code_accepts():
     refund = find_declaration("get_refund_policy")
     plan_enum = refund["parameters"]["properties"]["plan"]["enum"]
     assert sorted(plan_enum) == sorted(tools.REFUND_POLICIES.keys())
+
+
+def test_ticket_id_descriptions_give_no_example_id_to_copy():
+    # With "e.g. 12" here, a task that named no ticket made the model call
+    # get_ticket(12). The descriptions must not offer an id to copy.
+    for name in ["get_ticket", "send_reply", "escalate"]:
+        description = find_declaration(name)["parameters"]["properties"]["ticket_id"]["description"]
+        assert "e.g." not in description
+        assert "never guess" in description.lower()
+
+
+# ---------- escalate ----------
+
+def test_escalate_assigns_ticket_to_human_queue():
+    result = tools.escalate(23, "  Customer cannot say what is broken; needs a call.  ")
+
+    assert result == "Ticket 23 escalated to the human support queue."
+    assert query_db("SELECT status FROM tickets WHERE id = 23")[0][0] == "escalated"
+
+    rows = query_db("SELECT ticket_id, reason FROM escalations")
+    assert rows == [(23, "Customer cannot say what is broken; needs a call.")]
+
+
+def test_escalate_keeps_the_rest_of_the_ticket():
+    before = query_db("SELECT customer_id, subject, body, created_at FROM tickets WHERE id = 23")
+    tools.escalate(23, "Needs a human.")
+    after = query_db("SELECT customer_id, subject, body, created_at FROM tickets WHERE id = 23")
+    assert after == before
+
+
+def test_escalate_rejects_non_integer_and_bool_ticket_id():
+    assert tools.escalate("23", "Needs a human.").startswith("Error: ticket_id must be a whole number")
+    assert tools.escalate(True, "Needs a human.").startswith("Error: ticket_id must be a whole number")
+    assert query_db("SELECT COUNT(*) FROM escalations")[0][0] == 0
+
+
+def test_escalate_rejects_empty_or_non_text_reason():
+    assert tools.escalate(23, "   ").startswith("Error: reason must not be empty")
+    assert tools.escalate(23, None).startswith("Error: reason must be text")
+    assert query_db("SELECT status FROM tickets WHERE id = 23")[0][0] == "open"
+
+
+def test_escalate_rejects_too_long_reason():
+    assert tools.escalate(23, "a" * 501).startswith("Error: reason is too long")
+    # Exactly at the limit is fine.
+    assert tools.escalate(23, "a" * 500) == "Ticket 23 escalated to the human support queue."
+
+
+def test_escalate_rejects_missing_ticket():
+    assert tools.escalate(999, "Needs a human.") == (
+        "Error: no ticket with id 999. Check the id and try again."
+    )
+    assert query_db("SELECT COUNT(*) FROM escalations")[0][0] == 0
+
+
+def test_escalate_rejects_closed_and_already_escalated_tickets():
+    # Ticket 1 is closed in the seed data.
+    assert tools.escalate(1, "Needs a human.") == (
+        "Error: ticket 1 is closed, so it cannot be escalated."
+    )
+    tools.escalate(23, "Needs a human.")
+    assert tools.escalate(23, "Again.") == (
+        "Error: ticket 23 is already in the human support queue."
+    )
+    assert query_db("SELECT COUNT(*) FROM escalations")[0][0] == 1

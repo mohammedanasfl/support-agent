@@ -92,10 +92,11 @@ class FakeClient:
         self.chat = FakeChat(self.completions)
 
 
-def run_with(client, max_iterations=10, max_total_tokens=100_000,
+def run_with(client, max_iterations=10, max_total_tokens=100_000, max_tool_calls=1000,
              context_message_threshold=1000, context_keep_exchanges=2):
-    # The default threshold is so high that compaction never happens, so
-    # these tests check the loop on its own. tests/test_context.py tests compaction.
+    # The default threshold and tool limit are so high that compaction and the
+    # per-tool limit never happen, so these tests check the loop on its own.
+    # tests/test_context.py tests compaction, tests/test_limits.py the limits.
     return run_agent(
         client=client,
         goal="Look up ticket 20.",
@@ -103,6 +104,7 @@ def run_with(client, max_iterations=10, max_total_tokens=100_000,
         system_prompt="test prompt",
         max_iterations=max_iterations,
         max_total_tokens=max_total_tokens,
+        max_tool_calls=max_tool_calls,
         context_message_threshold=context_message_threshold,
         context_keep_exchanges=context_keep_exchanges,
     )
@@ -194,7 +196,7 @@ def test_stops_at_iteration_cap(monkeypatch):
     result = run_with(client, max_iterations=3)
 
     assert result["stop_reason"] == "max_iterations"
-    assert result["final_text"] is None
+    assert "iteration limit of 3" in result["final_text"]
     assert len(client.completions.messages_sent) == 3  # never more calls than the cap
 
 

@@ -5,11 +5,13 @@ import sys
 
 # The model every agent call uses, served by Groq.
 MODEL = "qwen/qwen3.8-27b"
+# MODEL = "openai/gpt-oss-20b"
 
 # Hard limits for one agent run. They are enforced by the code in agent.py,
 # not by asking the model nicely in the prompt.
 MAX_ITERATIONS = 10  # the most model calls one run may make
 MAX_TOTAL_TOKENS = 50_000  # the most tokens one run may use, added up over all calls
+MAX_TOOL_CALLS = 3  # the most times EACH tool may be called in one run (counted per tool)
 
 # Context compaction. Every call sends the whole message history, so a long run
 # pays for its old tool results again on every call. When the history is longer

@@ -62,7 +62,7 @@ def test_system_prompt_lists_every_category():
 
 def test_system_prompt_gives_guidance_for_every_tool():
     for tool_name in ["get_ticket", "search_tickets", "get_customer_history",
-                      "get_refund_policy", "send_reply"]:
+                      "get_refund_policy", "send_reply", "escalate"]:
         assert tool_name in SYSTEM_PROMPT
 
 

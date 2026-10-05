@@ -16,13 +16,13 @@ def conn():
     conn.close()
 
 
-def test_creates_all_four_tables(conn):
-    assert table_names(conn) == ["customers", "replies", "ticket_history", "tickets"]
+def test_creates_all_five_tables(conn):
+    assert table_names(conn) == ["customers", "escalations", "replies", "ticket_history", "tickets"]
 
 
 def test_create_schema_can_run_twice(conn):
     create_schema(conn)
-    assert table_names(conn) == ["customers", "replies", "ticket_history", "tickets"]
+    assert table_names(conn) == ["customers", "escalations", "replies", "ticket_history", "tickets"]
 
 
 def test_foreign_keys_are_enforced(conn):
