@@ -1,4 +1,4 @@
-"""SQLite connection and schema for customers, tickets, and ticket history.
+"""SQLite connection and schema for customers, tickets, ticket history, and replies.
 
 This module only creates the database structure. Seed data belongs in
 scripts/seed.py, and the queries used by the tools will be added later.
@@ -38,6 +38,15 @@ CREATE TABLE IF NOT EXISTS ticket_history (
     summary     TEXT    NOT NULL,
     resolved_at TEXT    NOT NULL
 );
+
+-- Replies recorded by the send_reply tool. Nothing is emailed: a row here IS
+-- the sent reply.
+CREATE TABLE IF NOT EXISTS replies (
+    id        INTEGER PRIMARY KEY,
+    ticket_id INTEGER NOT NULL REFERENCES tickets (id),
+    message   TEXT    NOT NULL,
+    sent_at   TEXT    NOT NULL
+);
 """
 
 
@@ -53,7 +62,7 @@ def connect(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
 
 
 def create_schema(conn: sqlite3.Connection) -> None:
-    """Create the three tables. Safe to run twice: existing tables are kept."""
+    """Create the four tables. Safe to run twice: existing tables are kept."""
     conn.executescript(SCHEMA)
 
 
