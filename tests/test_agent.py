@@ -92,7 +92,10 @@ class FakeClient:
         self.chat = FakeChat(self.completions)
 
 
-def run_with(client, max_iterations=10, max_total_tokens=100_000):
+def run_with(client, max_iterations=10, max_total_tokens=100_000,
+             context_message_threshold=1000, context_keep_exchanges=2):
+    # The default threshold is so high that compaction never happens, so
+    # these tests check the loop on its own. tests/test_context.py tests compaction.
     return run_agent(
         client=client,
         goal="Look up ticket 20.",
@@ -100,6 +103,8 @@ def run_with(client, max_iterations=10, max_total_tokens=100_000):
         system_prompt="test prompt",
         max_iterations=max_iterations,
         max_total_tokens=max_total_tokens,
+        context_message_threshold=context_message_threshold,
+        context_keep_exchanges=context_keep_exchanges,
     )
 
 

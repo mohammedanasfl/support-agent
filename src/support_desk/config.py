@@ -11,6 +11,14 @@ MODEL = "qwen/qwen3.8-27b"
 MAX_ITERATIONS = 10  # the most model calls one run may make
 MAX_TOTAL_TOKENS = 50_000  # the most tokens one run may use, added up over all calls
 
+# Context compaction. Every call sends the whole message history, so a long run
+# pays for its old tool results again on every call. When the history is longer
+# than CONTEXT_MESSAGE_THRESHOLD messages, the oldest tool exchanges are dropped
+# and only the most recent CONTEXT_KEEP_EXCHANGES are kept (plus the system
+# prompt and the goal, which are always kept).
+CONTEXT_MESSAGE_THRESHOLD = 12
+CONTEXT_KEEP_EXCHANGES = 2
+
 
 def get_api_key():
     """Return the Groq API key from the environment, or stop with a clear message."""

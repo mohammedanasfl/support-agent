@@ -4,6 +4,7 @@ run_agent() works like this:
 
     messages = [system prompt, user goal]
     repeat, at most max_iterations times:
+        if there are too many messages, drop the oldest tool exchanges
         send ALL the messages to the model
         add the model's reply to messages
         if the model did not ask for a tool -> stop: that reply is the final answer
@@ -90,6 +91,47 @@ def make_assistant_message(reply_text, tool_calls):
     return assistant_message
 
 
+def compact_messages(messages, keep_exchanges):
+    """Drop the oldest tool exchanges from messages, changing the list in place.
+
+    messages[0] is the system prompt and messages[1] is the goal. Both are
+    always kept. Everything after them is a series of tool exchanges. One
+    exchange is an assistant message that asked for tools, followed by one
+    "tool" message for each request:
+
+        [system] [goal] [assistant, tool] [assistant, tool, tool] [assistant, tool]
+                        |-- exchange 1 -| |------ exchange 2 ---| |-- exchange 3 -|
+
+    Only the newest keep_exchanges exchanges are kept (keep_exchanges must be
+    at least 1). An exchange is kept or
+    dropped as a whole: the API rejects a tool message whose request is
+    missing, and a request without its result would confuse the model.
+
+    What is dropped can be fetched again: the tools only read data, and the
+    goal (which names the ticket) is never dropped.
+
+    Returns how many messages were removed.
+    """
+    # Find where each exchange starts: every assistant message after the goal.
+    exchange_starts = []
+    for index in range(2, len(messages)):
+        if messages[index]["role"] == "assistant":
+            exchange_starts.append(index)
+
+    # Not more exchanges than we want to keep: nothing to drop.
+    if len(exchange_starts) <= keep_exchanges:
+        return 0
+
+    # The first message to keep is the start of the oldest exchange we keep.
+    # Everything between the goal and that message is removed. "del" with a
+    # slice removes those positions from the list itself, so this is still the
+    # same list object that the rest of the loop is using.
+    first_kept = exchange_starts[len(exchange_starts) - keep_exchanges]
+    removed = first_kept - 2
+    del messages[2:first_kept]
+    return removed
+
+
 def make_result(stop_reason, final_text, iterations, total_tokens, messages):
     """Collect everything about how a run ended into one dictionary."""
     return {
@@ -101,12 +143,23 @@ def make_result(stop_reason, final_text, iterations, total_tokens, messages):
     }
 
 
-def run_agent(client, goal, model, system_prompt, max_iterations, max_total_tokens):
+def run_agent(
+    client,
+    goal,
+    model,
+    system_prompt,
+    max_iterations,
+    max_total_tokens,
+    context_message_threshold,
+    context_keep_exchanges,
+):
     """Run the agent loop on one goal and return a result dictionary."""
 
     # The ONE message list for the whole run. It starts with the system
     # prompt and the user's goal. Every model reply and every tool result is
-    # appended to this same list, and the complete list is sent on every call.
+    # appended to this same list, and the whole list is sent on every call.
+    # When it grows too long, compaction (Step 0) removes old entries from
+    # this same list; it never makes a new one.
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": goal},
@@ -116,7 +169,19 @@ def run_agent(client, goal, model, system_prompt, max_iterations, max_total_toke
 
     for iteration in range(1, max_iterations + 1):
 
-        # Step 1: send the complete message history to the model.
+        # Step 0: if the history has grown too long, drop the oldest tool
+        # exchanges before sending it. This happens before the call, so the
+        # call never pays for the dropped messages.
+        # If the model asks for many tools at once, the newest exchanges alone
+        # can be longer than the threshold. Then nothing is removed, and we
+        # print nothing, because nothing was compacted.
+        if len(messages) > context_message_threshold:
+            messages_before = len(messages)
+            removed = compact_messages(messages, context_keep_exchanges)
+            if removed > 0:
+                print(f"[context] compacted {messages_before} messages -> {len(messages)} messages")
+
+        # Step 1: send the whole message history to the model.
         # tools=TOOL_DECLARATIONS shows the model which tools it may ASK for.
         # Groq never runs a tool itself; it only returns the request to us.
         messages_sent = len(messages)
