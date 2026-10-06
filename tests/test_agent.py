@@ -1,6 +1,6 @@
 """Tests for the agent loop.
 
-These use a fake Groq client that returns replies we write ourselves, so the
+These use a fake client that returns replies we write ourselves, so the
 tests never call the real API and never use up any rate limit.
 """
 
@@ -8,7 +8,7 @@ import json
 import runpy
 from pathlib import Path
 
-from groq.types.chat import ChatCompletion
+from openai.types.chat import ChatCompletion
 
 from support_desk import agent, tools
 from support_desk.agent import run_agent, run_tool
@@ -18,8 +18,8 @@ SEED = runpy.run_path(str(Path(__file__).resolve().parents[1] / "scripts" / "see
 
 
 # ---------- Fake model replies ----------
-# Built with Groq's real ChatCompletion type, so they have exactly the same
-# shape as the replies the real API returns.
+# Built with the openai SDK's real ChatCompletion type, so they have exactly
+# the same shape as the replies the real API returns.
 
 def make_tool_request_reply(ticket_id, tokens):
     """A fake reply in which the model asks for get_ticket(ticket_id)."""
@@ -85,7 +85,7 @@ class FakeChat:
 
 
 class FakeClient:
-    """Stands in for Groq(), so the code can call client.chat.completions.create."""
+    """Stands in for OpenAI(), so the code can call client.chat.completions.create."""
 
     def __init__(self, replies):
         self.completions = FakeCompletions(replies)
@@ -238,6 +238,48 @@ def test_tool_declarations_are_sent_on_every_call(monkeypatch):
 
     for tools_sent in client.completions.tools_sent:
         assert tools_sent is TOOL_DECLARATIONS
+
+
+def test_gemini_thought_signature_is_kept_in_the_history(monkeypatch):
+    # Gemini 3 returns a thought signature with each tool call and rejects the
+    # next call unless it comes back in the history unchanged.
+    monkeypatch.setitem(agent.TOOL_FUNCTIONS, "get_ticket", lambda ticket_id: "FAKE TICKET")
+    reply_with_signature = ChatCompletion.model_validate({
+        "id": "fake-reply", "created": 0, "model": "fake-model", "object": "chat.completion",
+        "choices": [{
+            "index": 0,
+            "finish_reason": "tool_calls",
+            "message": {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "get_ticket", "arguments": json.dumps({"ticket_id": 20})},
+                    "extra_content": {"google": {"thought_signature": "SIGNATURE"}},
+                }],
+            },
+        }],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 10},
+    })
+    client = FakeClient([reply_with_signature, make_text_reply("Done.", tokens=10)])
+
+    result = run_with(client)
+
+    tool_call = result["messages"][2]["tool_calls"][0]
+    assert tool_call["extra_content"] == {"google": {"thought_signature": "SIGNATURE"}}
+
+
+def test_tool_calls_without_a_signature_get_no_extra_field(monkeypatch):
+    monkeypatch.setitem(agent.TOOL_FUNCTIONS, "get_ticket", lambda ticket_id: "FAKE TICKET")
+    client = FakeClient([
+        make_tool_request_reply(ticket_id=20, tokens=10),
+        make_text_reply("Done.", tokens=10),
+    ])
+
+    result = run_with(client)
+
+    assert "extra_content" not in result["messages"][2]["tool_calls"][0]
 
 
 def test_unknown_tool_returns_error_string():

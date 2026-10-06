@@ -165,14 +165,25 @@ def make_assistant_message(reply_text, tool_calls):
     if len(tool_calls) > 0:
         assistant_message["tool_calls"] = []
         for tool_call in tool_calls:
-            assistant_message["tool_calls"].append({
+            tool_call_message = {
                 "id": tool_call.id,
                 "type": "function",
                 "function": {
                     "name": tool_call.function.name,
                     "arguments": tool_call.function.arguments,
                 },
-            })
+            }
+
+            # Gemini 3 attaches a "thought signature" to every tool call, in an
+            # extra field called extra_content. Gemini rejects the next call
+            # (error 400) unless the signature comes back unchanged in the
+            # history, so we copy it when it is there. getattr(..., None) gives
+            # None for replies without the field, such as the test fakes.
+            extra_content = getattr(tool_call, "extra_content", None)
+            if extra_content is not None:
+                tool_call_message["extra_content"] = extra_content
+
+            assistant_message["tool_calls"].append(tool_call_message)
 
     return assistant_message
 
@@ -288,7 +299,7 @@ def run_agent(
 
         # Step 1: send the whole message history to the model.
         # tools=TOOL_DECLARATIONS shows the model which tools it may ASK for.
-        # Groq never runs a tool itself; it only returns the request to us.
+        # The model API never runs a tool itself; it only returns the request to us.
         messages_sent = len(messages)
         response = client.chat.completions.create(
             model=model,

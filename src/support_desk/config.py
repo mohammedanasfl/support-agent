@@ -3,9 +3,13 @@
 import os
 import sys
 
-# The model every agent call uses, served by Groq.
-MODEL = "qwen/qwen3.8-27b"
-# MODEL = "openai/gpt-oss-20b"
+# The model every agent call uses: Google's Gemini 3.5 Flash Lite.
+MODEL = "gemini-3.5-flash-lite"
+
+# Gemini offers an OpenAI-compatible endpoint, so we call it with the openai
+# SDK. The request and reply have the same shape as before (messages,
+# tool_calls, usage), which is why agent.py did not have to change.
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
 # Hard limits for one agent run. They are enforced by the code in agent.py,
 # not by asking the model nicely in the prompt.
@@ -23,8 +27,8 @@ CONTEXT_KEEP_EXCHANGES = 2
 
 
 def get_api_key():
-    """Return the Groq API key from the environment, or stop with a clear message."""
-    api_key = os.environ.get("GROQ_API_KEY")
+    """Return the Gemini API key from the environment, or stop with a clear message."""
+    api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        sys.exit("GROQ_API_KEY is not set. Load it first:  set -a; source .env; set +a")
+        sys.exit("GEMINI_API_KEY is not set. Load it first:  set -a; source .env; set +a")
     return api_key

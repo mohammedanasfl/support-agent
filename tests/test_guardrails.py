@@ -9,7 +9,7 @@ import runpy
 from pathlib import Path
 
 import pytest
-from groq.types.chat import ChatCompletion
+from openai.types.chat import ChatCompletion
 
 from support_desk import agent, tools
 from support_desk.agent import run_escalate_with_approval, run_send_reply_with_approval
