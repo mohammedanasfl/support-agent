@@ -25,6 +25,8 @@ Every message is a plain Python dictionary with a "role":
 """
 
 import json
+import time
+from datetime import datetime, timezone
 
 from support_desk.guardrails import (
     ESCALATION_REJECTION_MESSAGE,
@@ -63,12 +65,35 @@ def run_tool(tool_name, arguments_json):
         return f"Error: wrong arguments for {tool_name}: {error}"
 
 
-def run_send_reply_with_approval(arguments_json, input_function):
+def fix_escaped_line_breaks(text):
+    """Turn the two characters backslash + n into a real line break.
+
+    The model sends tool arguments as JSON text. In JSON, a line break is
+    written as a backslash followed by n. Gemini sometimes adds an extra
+    backslash, and then json.loads (correctly) reads it as the two characters
+    backslash + n instead of a line break. The customer would see those two
+    characters in the reply instead of a new paragraph. A support reply never
+    needs the characters backslash + n, so replacing them is safe, and it
+    works whatever the model sends.
+
+    Anything that is not text (for example None, when the model left the
+    argument out) is returned unchanged, so the normal error handling for a
+    missing or wrong argument still applies.
+    """
+    if not isinstance(text, str):
+        return text
+    # "\\n" in Python code is the two characters backslash + n;
+    # "\n" is one real line break.
+    return text.replace("\\n", "\n")
+
+
+def run_send_reply_with_approval(arguments_json, input_function, actions_done=None):
     """Run send_reply only if a human approves the proposed reply.
 
     send_reply is the only tool that changes data, so the model's request is
-    treated as a PROPOSAL. A person sees the ticket id and the message and
-    answers yes or no:
+    treated as a PROPOSAL. A person sees the ticket id, the tools that really
+    ran so far (actions_done, when given), and the message, and answers yes
+    or no:
       - yes: run_tool runs the real send_reply, and its result is returned.
       - no:  send_reply is never called, so nothing is saved, and the model
              gets REJECTION_MESSAGE as the tool result so it can revise.
@@ -91,17 +116,25 @@ def run_send_reply_with_approval(arguments_json, input_function):
     ticket_id = tool_args.get("ticket_id")
     message = tool_args.get("message")
 
-    approved = ask_human_to_approve_reply(ticket_id, message, input_function)
+    # Fix the line breaks BEFORE the human sees the message, so the human
+    # approves exactly the text that will be saved.
+    message = fix_escaped_line_breaks(message)
+    if "message" in tool_args:
+        tool_args["message"] = message
+
+    approved = ask_human_to_approve_reply(ticket_id, message, input_function, actions_done)
 
     if not approved:
         print("[approval] rejected: send_reply was NOT run")
         return REJECTION_MESSAGE
 
     print("[approval] approved: running send_reply")
-    return run_tool("send_reply", arguments_json)
+    # json.dumps turns the arguments, with the fixed message, back into JSON
+    # text, so run_tool sends the approved message, not the model's original.
+    return run_tool("send_reply", json.dumps(tool_args))
 
 
-def run_escalate_with_approval(arguments_json, input_function):
+def run_escalate_with_approval(arguments_json, input_function, actions_done=None):
     """Run escalate only if a human approves it.
 
     Works like run_send_reply_with_approval, but returns TWO values:
@@ -122,14 +155,19 @@ def run_escalate_with_approval(arguments_json, input_function):
     ticket_id = tool_args.get("ticket_id")
     reason = tool_args.get("reason")
 
-    approved = ask_human_to_approve_escalation(ticket_id, reason, input_function)
+    # The same line-break fix as for a reply: the reason is read by people too.
+    reason = fix_escaped_line_breaks(reason)
+    if "reason" in tool_args:
+        tool_args["reason"] = reason
+
+    approved = ask_human_to_approve_escalation(ticket_id, reason, input_function, actions_done)
 
     if not approved:
         print("[approval] rejected: escalate was NOT run")
         return ESCALATION_REJECTION_MESSAGE, False
 
     print("[approval] approved: running escalate")
-    result = run_tool("escalate", arguments_json)
+    result = run_tool("escalate", json.dumps(tool_args))
 
     # Every tool and run_tool start their error messages with "Error:". So if
     # the result does not, the escalation succeeded.
@@ -229,7 +267,17 @@ def compact_messages(messages, keep_exchanges):
     return removed
 
 
-def make_result(stop_reason, final_text, iterations, total_tokens, messages):
+def elapsed_ms(start_time):
+    """Return the milliseconds since start_time, a value from time.perf_counter().
+
+    perf_counter() is a stopwatch: it is only good for measuring how long
+    something took, and it never jumps if the computer's clock is changed.
+    """
+    return round((time.perf_counter() - start_time) * 1000)
+
+
+def make_result(stop_reason, final_text, iterations, total_tokens, messages,
+                iteration_records, started_at, run_start_time):
     """Collect everything about how a run ended into one dictionary."""
     return {
         "stop_reason": stop_reason,  # why the loop stopped
@@ -238,6 +286,10 @@ def make_result(stop_reason, final_text, iterations, total_tokens, messages):
         "iterations": iterations,  # how many times we called the model
         "total_tokens": total_tokens,  # tokens used, added up over all calls
         "messages": messages,  # the complete history of the run
+        # For the trace (see tracing.py):
+        "started_at": started_at,  # when the run started (UTC date and time)
+        "total_duration_ms": elapsed_ms(run_start_time),  # how long the whole run took
+        "iteration_records": iteration_records,  # what happened in each iteration
     }
 
 
@@ -283,7 +335,21 @@ def run_agent(
     # so reaching the limit for one tool does not block the others.
     tool_call_counts = {}
 
+    # The tool calls that really ran in this run, in order, as readable text
+    # like 'get_ticket({"ticket_id":17})'. The human approving a reply or an
+    # escalation sees this list, so they can spot a reply that claims an
+    # action no tool did, or a reply already sent before an escalation.
+    actions_done = []
+
+    # For the trace: when the run started, a stopwatch for how long it takes,
+    # and one record per iteration (see iteration_record below). Recording
+    # only stores values; it never changes what the loop does.
+    started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    run_start_time = time.perf_counter()
+    iteration_records = []
+
     for iteration in range(1, max_iterations + 1):
+        iteration_start_time = time.perf_counter()
 
         # Step 0: if the history has grown too long, drop the oldest tool
         # exchanges before sending it. This happens before the call, so the
@@ -315,10 +381,27 @@ def run_agent(
             f"call_tokens={call_tokens} total_tokens={total_tokens}"
         )
 
+        # The trace record for this iteration. It is added to the list now and
+        # filled in as the iteration goes on:
+        #   tool_calls  stays None if the model asked for no tool (a final
+        #               answer or an empty reply); otherwise a list, because
+        #               one reply can ask for several tools
+        #   elapsed_ms  set when the iteration ends, just before a return or
+        #               at the bottom of the loop
+        iteration_record = {
+            "iteration": iteration,
+            "call_tokens": call_tokens,
+            "tool_calls": None,
+            "elapsed_ms": None,
+        }
+        iteration_records.append(iteration_record)
+
         # Step 3: read the reply, and stop if it contains nothing usable.
         if not response.choices:
             print(f"[iter {iteration}] empty response")
-            return make_result("empty_response", None, iteration, total_tokens, messages)
+            iteration_record["elapsed_ms"] = elapsed_ms(iteration_start_time)
+            return make_result("empty_response", None, iteration, total_tokens, messages,
+                               iteration_records, started_at, run_start_time)
 
         model_reply = response.choices[0].message
         reply_text = model_reply.content  # None when the model only asks for tools
@@ -328,7 +411,9 @@ def run_agent(
 
         if len(tool_calls) == 0 and not reply_text:
             print(f"[iter {iteration}] empty response")
-            return make_result("empty_response", None, iteration, total_tokens, messages)
+            iteration_record["elapsed_ms"] = elapsed_ms(iteration_start_time)
+            return make_result("empty_response", None, iteration, total_tokens, messages,
+                               iteration_records, started_at, run_start_time)
 
         # Step 4: add the model's reply to the history.
         messages.append(make_assistant_message(reply_text, tool_calls))
@@ -336,10 +421,23 @@ def run_agent(
         # Step 5: no tool requested means the model has given its final answer.
         if len(tool_calls) == 0:
             print(f"[iter {iteration}] final answer")
-            return make_result("final_answer", reply_text, iteration, total_tokens, messages)
+            iteration_record["elapsed_ms"] = elapsed_ms(iteration_start_time)
+            return make_result("final_answer", reply_text, iteration, total_tokens, messages,
+                               iteration_records, started_at, run_start_time)
 
+        # Record every requested tool in the trace. "result" starts as None and
+        # is filled in by Step 7; it stays None for a tool that is never run
+        # (the token budget stopped the run, or an escalation ended it first).
+        # The arguments are kept exactly as the model sent them, as JSON text,
+        # so the trace also shows arguments that were not valid JSON.
+        iteration_record["tool_calls"] = []
         for tool_call in tool_calls:
             print(f"[iter {iteration}] tool requested: {format_tool_call(tool_call)}")
+            iteration_record["tool_calls"].append({
+                "tool": tool_call.function.name,
+                "arguments": tool_call.function.arguments,
+                "result": None,
+            })
 
         # Step 6: stop if the token budget is used up.
         # This check comes after the final-answer check, so a finished answer is
@@ -354,7 +452,9 @@ def run_agent(
                 f"({total_tokens} tokens used) before the model gave a final answer."
             )
             print(f"[iter {iteration}] {explanation}")
-            return make_result("token_budget", explanation, iteration, total_tokens, messages)
+            iteration_record["elapsed_ms"] = elapsed_ms(iteration_start_time)
+            return make_result("token_budget", explanation, iteration, total_tokens, messages,
+                               iteration_records, started_at, run_start_time)
 
         # Step 7: run each requested tool ourselves, and add each result to the
         # history as its own "tool" message. tool_call_id tells the model which
@@ -364,7 +464,9 @@ def run_agent(
         # send_reply and escalate change data, so they go through a human
         # approval gate instead of being run directly. The other tools only
         # read data.
-        for tool_call in tool_calls:
+        # enumerate gives each request's position too, so we can find its
+        # entry in iteration_record["tool_calls"] (same order as tool_calls).
+        for position, tool_call in enumerate(tool_calls):
             tool_name = tool_call.function.name
             escalated = False
 
@@ -383,11 +485,26 @@ def run_agent(
                 tool_call_counts[tool_name] = calls_so_far + 1
 
                 if tool_name == "send_reply":
-                    result = run_send_reply_with_approval(tool_call.function.arguments, input_function)
+                    result = run_send_reply_with_approval(
+                        tool_call.function.arguments, input_function, actions_done
+                    )
                 elif tool_name == "escalate":
-                    result, escalated = run_escalate_with_approval(tool_call.function.arguments, input_function)
+                    result, escalated = run_escalate_with_approval(
+                        tool_call.function.arguments, input_function, actions_done
+                    )
                 else:
                     result = run_tool(tool_name, tool_call.function.arguments)
+
+                # Add the call to actions_done only if it really did something.
+                # Every error starts with "Error:", and a rejected send_reply
+                # or escalate returns its rejection message: in both cases
+                # nothing happened, so the call is not listed.
+                if (
+                    not result.startswith("Error:")
+                    and result != REJECTION_MESSAGE
+                    and result != ESCALATION_REJECTION_MESSAGE
+                ):
+                    actions_done.append(format_tool_call(tool_call))
 
             tool_message = {
                 "role": "tool",
@@ -396,13 +513,23 @@ def run_agent(
             }
             messages.append(tool_message)
 
+            # The trace gets the same text the model got: the tool's output, or
+            # the error / rejection / limit message that was sent instead.
+            iteration_record["tool_calls"][position]["result"] = result
+
             # Step 8: a successful escalation hands the ticket to a person, so
             # the run ends here, straight after recording the result. The
             # model is not called again, and any later tool requests in this
             # same reply are not run.
             if escalated:
                 print(f"[iter {iteration}] ticket escalated, stopping the run")
-                return make_result("escalated", result, iteration, total_tokens, messages)
+                iteration_record["elapsed_ms"] = elapsed_ms(iteration_start_time)
+                return make_result("escalated", result, iteration, total_tokens, messages,
+                                   iteration_records, started_at, run_start_time)
+
+        # This iteration is over. Its time includes the model call, running the
+        # tools, and any time a human took to answer an approval question.
+        iteration_record["elapsed_ms"] = elapsed_ms(iteration_start_time)
 
         # The loop now goes round, and the model is called again with everything.
 
@@ -414,4 +541,5 @@ def run_agent(
         f"reached before the model gave a final answer."
     )
     print(explanation)
-    return make_result("max_iterations", explanation, max_iterations, total_tokens, messages)
+    return make_result("max_iterations", explanation, max_iterations, total_tokens, messages,
+                       iteration_records, started_at, run_start_time)
