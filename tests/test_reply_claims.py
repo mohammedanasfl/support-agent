@@ -4,8 +4,8 @@ A reply said "I have forwarded your case to our billing team" before any
 escalation had happened. Later runs promised a follow-up and then did not
 escalate, or the escalation was rejected. The fixes, tested here:
   1. The system prompt says a reply may only claim what really happened, and
-     a reply that says a team will look at the case must be followed by
-     escalate.
+     a reply may only say that a team will look at the case when escalate
+     follows it (one rule for when to escalate, see the escalate entry).
   2. The human approving a reply sees the tools that really ran in this run.
   3. The human approving an escalation also sees a reply that was already
      sent, so they know what the customer was promised before rejecting.
@@ -60,24 +60,44 @@ def reply_proposals(printed):
 # ---------- 1. The rules are in the system prompt ----------
 
 def test_prompt_says_a_reply_states_only_facts():
-    assert "In a reply, state only facts that the ticket or a tool result shows." in PROMPT_TEXT
-    assert "say that it is not confirmed yet" in PROMPT_TEXT
-    assert "Do not tell the customer how it will turn out" in PROMPT_TEXT
-    assert "that they will not be charged twice" in PROMPT_TEXT
+    assert "In your answer and in a reply, state only facts the ticket or a tool result shows" in PROMPT_TEXT
+    assert "if something is unconfirmed, say so" in PROMPT_TEXT
+    assert "Never promise a refund, credit, account change, or outcome." in PROMPT_TEXT
 
 
 def test_prompt_says_a_reply_claims_only_what_is_done():
-    assert "describe as done only what a tool result in this run has confirmed" in PROMPT_TEXT
-    assert "nothing has been escalated or forwarded yet when you write it" in PROMPT_TEXT
-
-
-def test_prompt_ties_a_hand_over_in_a_reply_to_escalate():
     assert (
-        "If a reply tells the customer that a team will look at their case, call "
-        "escalate right after that reply is sent"
+        "Never say a reply was sent or a ticket was escalated unless the tool "
+        "result confirms it."
     ) in PROMPT_TEXT
-    assert "If you will not escalate, the reply must not say that anyone else will look at the case." in PROMPT_TEXT
+    assert (
+        "never say you or a team noted, logged, recorded, forwarded, or sent "
+        "anything that no tool result confirms"
+    ) in PROMPT_TEXT
+
+
+def test_prompt_has_one_rule_for_when_to_escalate():
+    # "handle" + a ticket that needs a human: escalate, a recommendation is not enough.
+    assert "Then recommending escalation is not enough: call escalate, after any reply the task asks for." in PROMPT_TEXT
     assert "a person still has to follow up with the customer" in PROMPT_TEXT
+    # Every other task: only recommend it, and the reply promises no follow-up.
+    assert "the task only asks you to triage or to reply), do not call it: recommend escalation in the Next step" in PROMPT_TEXT
+    assert "do not tell the customer in a reply that anyone will look at or follow up on the case" in PROMPT_TEXT
+
+
+def test_output_format_counts_escalate_as_an_action_of_a_handle_task():
+    # The model decides how to finish while reading OUTPUT FORMAT. In the Part
+    # 8 evals it often only recommended escalating a "handle" task there.
+    assert (
+        "Give the final answer only after every action the task asks for is done, "
+        "including escalate when the task says handle and the ticket needs a human"
+    ) in PROMPT_TEXT
+
+
+def test_prompt_no_longer_has_the_conflicting_hand_over_rule():
+    # In the Part 8 evals this rule made the model escalate triage-only tasks
+    # after a reply that said "our team will look into this".
+    assert "If a reply tells the customer that a team will look at their case" not in PROMPT_TEXT
 
 
 def test_prompt_no_longer_gives_a_hand_over_wording_to_copy():

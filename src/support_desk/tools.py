@@ -409,6 +409,15 @@ def send_reply(ticket_id, message):
     - The ticket_id description says to use the ticket the task names and
       never one from search results, with no example id to copy. A reply
       sent to the wrong ticket goes to the wrong customer.
+    - The message description says what to write to show understanding:
+      repeat what the customer said. In the Part 8 evals, replies said "I've
+      noted your request" or "we've recorded your request", although no tool
+      does that (the system prompt forbids such claims). A first version of
+      this description listed those words as forbidden, and the evals got
+      worse (every bug and feature reply used them), most likely because
+      naming the words put them in front of the model while it wrote. So the
+      description gives the wording to use instead, and names no forbidden
+      words.
     """
     if not is_whole_number(ticket_id):
         return f"Error: ticket_id must be a whole number, e.g. 12. Got {ticket_id!r}."
@@ -474,6 +483,13 @@ def escalate(ticket_id, reason):
     - It says WHEN to use the tool (the ticket needs a person: a decision,
       an action the tools cannot do, or not enough evidence), not just what
       it does, so the model does not escalate easy tickets.
+    - It says a request that a policy passes on (for example to an account
+      manager) is such a decision. In the Part 8 evals, ticket 16's policy
+      said the account manager handles seat credits, and the model only
+      recommended escalating instead of escalating.
+    - It says not to use it for tickets you can RESOLVE yourself. It used to
+      say "triage", but every ticket can be triaged, so that wording argued
+      against escalating even tickets that need a person.
     - It says the run ends afterwards, so the model does everything else it
       needs to do (for example, a reply) BEFORE it escalates.
     - It asks for a reason that explains why human review is needed, because
@@ -669,7 +685,12 @@ TOOL_DECLARATIONS = [
                     },
                     "message": {
                         "type": "string",
-                        "description": "The full reply text for the customer.",
+                        "description": (
+                            "The full reply text for the customer. State only facts "
+                            "from the ticket or tool results. To show you understood "
+                            "the customer, repeat what they told you (for example "
+                            "\"You mentioned that...\")."
+                        ),
                     },
                 },
                 "required": ["ticket_id", "message"],
@@ -683,10 +704,12 @@ TOOL_DECLARATIONS = [
             "description": (
                 "Assign a ticket to the human support queue. Use it when the issue "
                 "needs human intervention: a refund, credit or account decision a "
-                "person must make, a request involving someone else's account, an "
-                "action the other tools cannot do, or not enough evidence to decide. "
-                "Do not use it for tickets you can triage yourself. The agent run "
-                "ends after a successful escalation, so do anything else first. "
+                "person must make (including one a policy says must be passed on, "
+                "for example to an account manager), a request involving someone "
+                "else's account, an action the other tools cannot do, or not enough "
+                "evidence to decide. Do not use it for tickets you can resolve "
+                "yourself. The agent run ends after a successful escalation, so do "
+                "anything else first. "
                 "Returns a confirmation, or an error message (for example, if the "
                 "ticket is closed or already escalated)."
             ),

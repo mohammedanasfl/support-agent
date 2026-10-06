@@ -305,6 +305,26 @@ def test_enums_match_the_values_the_code_accepts():
     assert sorted(plan_enum) == sorted(tools.REFUND_POLICIES.keys())
 
 
+def test_escalate_description_counts_a_policy_hand_over_as_a_reason():
+    # In the Part 8 evals, ticket 16's policy said the account manager handles
+    # seat credits, and the model only recommended escalating. "Triage" was
+    # also replaced by "resolve": every ticket can be triaged.
+    description = find_declaration("escalate")["description"]
+    assert "a policy says must be passed on" in description
+    assert "Do not use it for tickets you can resolve yourself." in description
+
+
+def test_send_reply_message_description_says_how_to_acknowledge():
+    # In the Part 8 evals, replies said "I've noted your request" although no
+    # tool notes anything. Naming the forbidden words here made it worse, so
+    # the description says what to write instead and does not name them.
+    description = find_declaration("send_reply")["parameters"]["properties"]["message"]["description"]
+    assert "State only facts from the ticket or tool results." in description
+    assert "repeat what they told you" in description
+    assert "noted" not in description
+    assert "recorded" not in description
+
+
 def test_ticket_id_descriptions_give_no_example_id_to_copy():
     # With "e.g. 12" here, a task that named no ticket made the model call
     # get_ticket(12). The descriptions must not offer an id to copy.
