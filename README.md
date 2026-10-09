@@ -6,24 +6,36 @@ OpenAI-compatible endpoint and the `openai` SDK. The agent loop, tool dispatch, 
 message history are written by hand — no agent frameworks (LangChain,
 LangGraph, CrewAI, smolagents, Agents SDK).
 
-> Status: Part 1 (data and setup) and Part 2 (the loop) are done.
+> Status: all eight parts are done — data and setup, the agent loop, tools,
+> system prompt and context compaction, guardrails and human approval, the
+> prompt-injection test, tracing, and evals.
+
+## What the agent does
+
+- Reads support tickets from a local SQLite database and triages them: a
+  category, a short summary, and the next step.
+- Uses six tools. Four only read data: `get_ticket`, `search_tickets`,
+  `get_customer_history`, `get_refund_policy`. Two change data and only run
+  after a person approves them at the terminal: `send_reply` and `escalate`.
+- Enforces hard limits in code: model calls per run, tokens per run, and calls
+  per tool.
+- Saves every run as one JSON line in `traces/runs.jsonl`.
 
 ## Project layout
 
 ```
 src/support_desk/   The agent package
-  main.py           Command-line entry point
-  config.py         API key from the environment, model name, run limits
-  agent.py          The hand-written agent loop
-  tools.py          All tools (four read tools, send_reply, escalate)
-  guardrails.py     Code-enforced caps and the human approval gate
-  context.py        Message-history compaction
-  tracing.py        One JSON trace per run
+  main.py           Runs the agent once on the GOAL written in this file
+  config.py         Model, API key from the environment, run limits
+  agent.py          The hand-written agent loop, including context compaction
+  tools.py          The six tools and their descriptions
+  guardrails.py     Human approval prompts and the per-tool limit message
+  tracing.py        Writes one JSON trace per run
   db.py             SQLite access
-prompts/            System prompt, kept in its own file
-scripts/            seed.py, check_key.py, view_trace.py
-evals/              Eval test cases and runner
-docs/               Tool description note, injection notes, eval results
+prompts/            The system prompt (system_prompt.py)
+scripts/            seed.py, check_key.py, trace_viewer.py
+evals/              test_set.py (12 cases), run_evals.py (runner), eval.md (report)
+docs/               Tool description note, injection notes, tracing note, eval results
 data/               SQLite database (generated, not committed)
 traces/             Run traces (generated, not committed)
 tests/              pytest unit tests
@@ -52,13 +64,47 @@ python scripts/check_key.py
 ## Running the agent
 
 ```bash
-python scripts/seed.py           # build the database
+python scripts/seed.py           # build (or reset) the database
 python -m support_desk.main      # run the agent on the GOAL set in main.py
 ```
 
-To change the task, edit `GOAL` in `src/support_desk/main.py` (set it to
-`IMPOSSIBLE_GOAL` to see the iteration cap stop a run). To try the limits,
-edit `MAX_ITERATIONS` or `MAX_TOTAL_TOKENS` in `src/support_desk/config.py`.
+- To change the task, edit `GOAL` in `src/support_desk/main.py`.
+- When the agent wants to send a reply or escalate, it stops and shows the
+  proposal and the tools that really ran so far. Type `y` to approve; anything
+  else rejects it, and the agent is told it was not done.
+- To see a cap stop a run, lower `MAX_ITERATIONS` (for example to 2),
+  `MAX_TOTAL_TOKENS` or `MAX_TOOL_CALLS` in `src/support_desk/config.py`.
+
+## Viewing traces
+
+```bash
+python scripts/trace_viewer.py traces/runs.jsonl
+```
+
+The viewer lists the runs in the file, then prints the chosen run as a tree:
+every iteration with its tool calls, arguments, results, tokens and time.
+
+## Running the evals
+
+```bash
+python evals/run_evals.py
+```
+
+Each of the 12 cases in `evals/test_set.py` runs 3 times with the real agent,
+each time on a fresh temporary database. Proposals are approved automatically
+by the eval approver. Eval traces go to `traces/eval_runs.jsonl`. A full run
+makes about 120 model calls (the Gemini free tier allows 500 requests a day
+for this model).
+
+## Notes and results
+
+- `docs/tool-description-note.md`: the rewritten `search_tickets` description
+  and how it changed the agent's searches (Part 3)
+- `docs/injection-notes.md`: the planted injection ticket and the lethal
+  trifecta (Part 6)
+- `docs/tracing-note.md`: a failure investigated with the trace viewer (Part 7)
+- `docs/eval-results.md`: before and after numbers for one change (Part 8)
+- `evals/eval.md`: the final evaluation report (Part 8)
 
 ## Running tests
 
