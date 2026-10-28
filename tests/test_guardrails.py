@@ -19,7 +19,9 @@ from support_desk.guardrails import (
     ESCALATION_QUESTION,
     ESCALATION_REJECTION_MESSAGE,
     REJECTION_MESSAGE,
+    get_rejection_feedback,
     is_approved,
+    make_rejection_message,
 )
 from tests.test_agent import FakeClient, make_text_reply, make_tool_request_reply
 
@@ -115,6 +117,25 @@ def test_everything_else_is_a_rejection():
         assert is_approved(answer) is False
 
 
+# ---------- Rejection feedback ----------
+
+def test_a_plain_no_has_no_feedback():
+    for answer in ["", "n", "no", "N", " No ", "\n"]:
+        assert get_rejection_feedback(answer) is None
+
+
+def test_any_other_rejection_is_feedback():
+    assert get_rejection_feedback("  don't promise a refund \n") == "don't promise a refund"
+    assert get_rejection_feedback("no refund promises") == "no refund promises"
+
+
+def test_rejection_message_includes_the_feedback():
+    assert make_rejection_message(None) == REJECTION_MESSAGE
+    message = make_rejection_message("don't promise a refund")
+    assert message.startswith(REJECTION_MESSAGE)
+    assert message.endswith("The human's feedback: don't promise a refund")
+
+
 # ---------- run_send_reply_with_approval ----------
 
 def test_approved_reply_is_sent_and_stored(capsys):
@@ -145,6 +166,17 @@ def test_rejected_reply_is_not_sent():
     )
 
     assert result == REJECTION_MESSAGE
+    assert count_replies() == 0
+    assert ticket_status(20) == "open"
+
+
+def test_rejected_reply_with_feedback_is_not_sent():
+    result = run_send_reply_with_approval(
+        send_reply_arguments(20, "We will refund you today."),
+        FakeInput(["don't promise a refund"]),
+    )
+
+    assert result == make_rejection_message("don't promise a refund")
     assert count_replies() == 0
     assert ticket_status(20) == "open"
 
@@ -226,6 +258,31 @@ def test_reject_then_approve_in_the_loop():
     conn.close()
     assert stored == [("Revised draft.",)]
     assert ticket_status(20) == "replied"
+
+
+def test_rejection_feedback_reaches_the_model_before_it_revises():
+    client = FakeClient([
+        make_send_reply_request(20, "We will refund you today.", call_id="call_1"),
+        make_send_reply_request(20, "Revised draft.", call_id="call_2"),
+        make_text_reply("Ticket: 20 ...", tokens=10),
+    ])
+    fake_input = FakeInput(["don't promise a refund", "y"])
+
+    result = run_loop(client, fake_input)
+
+    # The second model call (the one that writes the revision) received the
+    # human's feedback as the tool result for the rejected reply.
+    second_call_messages = client.completions.lists_sent[1]
+    rejection = second_call_messages[client.completions.messages_sent[1] - 1]
+    assert rejection["tool_call_id"] == "call_1"
+    assert rejection["content"] == make_rejection_message("don't promise a refund")
+
+    # The revision was approved and is the only reply stored.
+    assert result["stop_reason"] == "final_answer"
+    conn = connect(tools.DB_PATH)
+    stored = conn.execute("SELECT message FROM replies").fetchall()
+    conn.close()
+    assert stored == [("Revised draft.",)]
 
 
 def test_other_tools_do_not_ask_the_human():

@@ -71,9 +71,14 @@ python -m support_desk.main      # run the agent on the GOAL set in main.py
 - To change the task, edit `GOAL` in `src/support_desk/main.py`.
 - When the agent wants to send a reply or escalate, it stops and shows the
   proposal and the tools that really ran so far. Type `y` to approve; anything
-  else rejects it, and the agent is told it was not done.
+  else rejects it, and the agent is told it was not done. When rejecting a
+  reply, type what to change (for example `don't promise a refund`) instead of
+  `n`: the agent gets those words and revises the reply.
 - To see a cap stop a run, lower `MAX_ITERATIONS` (for example to 2),
   `MAX_TOTAL_TOKENS` or `MAX_TOOL_CALLS` in `src/support_desk/config.py`.
+  When the model asks for a tool that already used its `MAX_TOOL_CALLS`
+  calls, the request is not run and the run stops with stop reason
+  `tool_call_limit` and an explanation.
 
 ## Viewing traces
 

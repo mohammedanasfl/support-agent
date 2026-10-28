@@ -122,18 +122,17 @@ def test_reply_proposal_lists_the_tools_that_ran(capsys):
     assert "the ticket has NOT been escalated or forwarded to anyone" in proposal
 
 
-def test_failed_rejected_and_blocked_calls_are_not_listed(capsys):
+def test_failed_calls_are_not_listed(capsys):
+    # (A call blocked by the per-tool limit is never listed either: it stops
+    # the run, so no proposal comes after it. See test_limits.py.)
     client = FakeClient([
         # get_ticket on a ticket that does not exist: an error, nothing done.
         make_tool_calls_reply([("get_ticket", {"ticket_id": 999}, "call_1")]),
-        # A second get_ticket is blocked by the limit of 1 call per tool.
-        make_tool_calls_reply([("get_ticket", {"ticket_id": 20}, "call_2")]),
-        # The first reply is rejected, so it was not sent.
-        make_tool_calls_reply([("send_reply", {"ticket_id": 20, "message": "Draft 1."}, "call_3")]),
+        make_tool_calls_reply([("send_reply", {"ticket_id": 20, "message": "Draft 1."}, "call_2")]),
         make_text_reply("Ticket: 20 ...", tokens=10),
     ])
 
-    run_loop(client, FakeInput(["n"]), max_tool_calls=1)
+    run_loop(client, FakeInput(["n"]))
 
     proposal = reply_proposals(capsys.readouterr().out)[0]
     # Nothing really ran before the reply was proposed.
@@ -153,6 +152,22 @@ def test_a_rejected_reply_is_not_listed_as_done(capsys):
     proposals = reply_proposals(capsys.readouterr().out)
     assert len(proposals) == 2
     # When Draft 2 is proposed, the rejected Draft 1 is not listed as sent.
+    assert "- send_reply" not in proposals[1]
+
+
+def test_a_reply_rejected_with_feedback_is_not_listed_as_done(capsys):
+    # The tool result is then REJECTION_MESSAGE plus the feedback, so the
+    # loop must still recognise it as a rejection.
+    client = FakeClient([
+        make_tool_calls_reply([("send_reply", {"ticket_id": 20, "message": "Draft 1."}, "call_1")]),
+        make_tool_calls_reply([("send_reply", {"ticket_id": 20, "message": "Draft 2."}, "call_2")]),
+        make_text_reply("Ticket: 20 ...", tokens=10),
+    ])
+
+    run_loop(client, FakeInput(["make it shorter", "y"]))
+
+    proposals = reply_proposals(capsys.readouterr().out)
+    assert len(proposals) == 2
     assert "- send_reply" not in proposals[1]
 
 

@@ -13,19 +13,24 @@ human can check a reply against what was actually done, and see a reply
 that was already sent before deciding on an escalation (added after the
 Part 7 trace investigation, see show_actions_done).
 
+When rejecting a reply, the human can type what to change instead of "n".
+Those words are added to the rejection the model gets, so the model knows
+what to fix instead of guessing.
+
 Also the message for the per-tool call limit: agent.py counts how often each
-tool was called, and once a tool reaches the limit, the model gets this
-message instead of the tool running.
+tool was called, and when the model asks for a tool that already reached the
+limit, the tool is not run and the run stops with this message.
 """
 
 # The tool result the model gets when the human says no. It is returned as a
 # normal "tool" message, so the run continues and the model can try again.
+# make_rejection_message adds the human's feedback to it, if they gave any.
 REJECTION_MESSAGE = (
     "Human rejected the proposed reply. The reply was NOT sent. "
-    "Please revise the reply and propose it again."
+    "Revise the reply and call send_reply again with the revised version."
 )
 
-APPROVAL_QUESTION = "Approve this reply? [y/N]: "
+APPROVAL_QUESTION = "Approve this reply? [y/N, or type what to change]: "
 
 # The same two things for escalate. The rejection tells the model it may keep
 # working on the ticket, because a rejected escalation does not end the run.
@@ -39,17 +44,17 @@ ESCALATION_QUESTION = "Approve this escalation? [y/N]: "
 
 
 def make_tool_limit_message(tool_name, max_tool_calls):
-    """The tool result the model gets when a tool has reached its call limit.
+    """The tool result recorded for a request over its tool's call limit.
 
-    It starts with "Error:" like every other tool error, says clearly that
-    the tool was NOT run, and points the model at what it can still do, so
-    the run can continue with other tools or a final answer.
+    It starts with "Error:" like every other tool error and says clearly that
+    the tool was NOT run. The run stops right after it (see agent.py), so the
+    model never reads it; it is there so the history and the trace show a
+    result for the blocked request, and why it was not run.
     """
     return (
         f"Error: {tool_name} was NOT run. It has already been called "
-        f"{max_tool_calls} times in this run, which is the limit for one tool. "
-        f"Use the information you already have, use a different tool, or give "
-        f"your final answer."
+        f"{max_tool_calls} times in this run, which is the limit for one tool, "
+        f"so the run stops here."
     )
 
 
@@ -65,6 +70,30 @@ def is_approved(answer):
     if cleaned == "y" or cleaned == "yes":
         return True
     return False
+
+
+def get_rejection_feedback(answer):
+    """Return what the human typed to say what to change, or None.
+
+    Only used after is_approved returned False. "n", "no" and an empty answer
+    are a plain no, without feedback. Any other answer, for example "don't
+    promise a refund", is the human's feedback for the model.
+    """
+    cleaned = answer.strip()
+    if cleaned.lower() in ("", "n", "no"):
+        return None
+    return cleaned
+
+
+def make_rejection_message(feedback):
+    """Return the tool result the model gets when the human rejects a reply.
+
+    Without feedback this is REJECTION_MESSAGE. With feedback, the human's
+    words are added at the end, so the model can fix exactly that.
+    """
+    if feedback is None:
+        return REJECTION_MESSAGE
+    return f"{REJECTION_MESSAGE} The human's feedback: {feedback}"
 
 
 def show_actions_done(actions_done):
@@ -121,7 +150,10 @@ def show_reply_proposal(ticket_id, message, actions_done=None):
 
 
 def ask_human_to_approve_reply(ticket_id, message, input_function, actions_done=None):
-    """Show the proposed reply, ask the human, and return True if they approved.
+    """Show the proposed reply, ask the human, and return two values:
+        approved  True if they approved
+        feedback  what they typed to say what to change, or None
+                  (always None when approved; see get_rejection_feedback)
 
     input_function is the function that reads the human's answer. The real
     program passes Python's built-in input(), which waits for someone to type
@@ -132,7 +164,9 @@ def ask_human_to_approve_reply(ticket_id, message, input_function, actions_done=
     """
     show_reply_proposal(ticket_id, message, actions_done)
     answer = input_function(APPROVAL_QUESTION)
-    return is_approved(answer)
+    if is_approved(answer):
+        return True, None
+    return False, get_rejection_feedback(answer)
 
 
 def show_escalation_proposal(ticket_id, reason, actions_done=None):
@@ -160,8 +194,9 @@ def show_escalation_proposal(ticket_id, reason, actions_done=None):
 def ask_human_to_approve_escalation(ticket_id, reason, input_function, actions_done=None):
     """Show the proposed escalation, ask the human, and return True if they approved.
 
-    Works exactly like ask_human_to_approve_reply, including the same rule
-    for what counts as a yes.
+    Works like ask_human_to_approve_reply, with the same rule for what counts
+    as a yes, but returns only True or False: feedback is only collected for
+    replies, which the model revises to get them approved.
     """
     show_escalation_proposal(ticket_id, reason, actions_done)
     answer = input_function(ESCALATION_QUESTION)

@@ -164,17 +164,14 @@ def test_token_limit_reached_exactly_also_stops(monkeypatch):
 
 # ---------- C. Per-tool limit ----------
 
-def test_tool_over_its_limit_is_not_run_and_other_tools_still_work(monkeypatch):
+def test_tool_over_its_limit_is_not_run_and_stops_the_run(monkeypatch):
     get_ticket_calls = []
-    history_calls = []
     monkeypatch.setitem(agent.TOOL_FUNCTIONS, "get_ticket", make_spy_tool(get_ticket_calls, "FAKE TICKET"))
-    monkeypatch.setitem(agent.TOOL_FUNCTIONS, "get_customer_history", make_spy_tool(history_calls, "FAKE HISTORY"))
     client = FakeClient([
         make_tool_calls_reply([("get_ticket", {"ticket_id": 20}, "call_1")]),
         make_tool_calls_reply([("get_ticket", {"ticket_id": 20}, "call_2")]),
         make_tool_calls_reply([("get_ticket", {"ticket_id": 20}, "call_3")]),
-        make_tool_calls_reply([("get_customer_history", {"customer_id": 5}, "call_4")]),
-        make_text_reply("Ticket: 20 ...", tokens=10),
+        make_text_reply("must never be reached", tokens=10),
     ])
 
     result = run_limited(client, max_tool_calls=2)
@@ -188,28 +185,40 @@ def test_tool_over_its_limit_is_not_run_and_other_tools_still_work(monkeypatch):
     assert results["call_3"] == make_tool_limit_message("get_ticket", 2)
     assert "get_ticket was NOT run" in results["call_3"]
 
-    # Another tool still ran, and the run went on to a normal final answer.
-    assert history_calls == [{"customer_id": 5}]
-    assert results["call_4"] == "FAKE HISTORY"
-    assert result["stop_reason"] == "final_answer"
+    # The run stopped right there: the model was not called a fourth time,
+    # and the result explains which tool hit which limit.
+    assert len(client.completions.messages_sent) == 3
+    assert result["stop_reason"] == "tool_call_limit"
+    assert result["iterations"] == 3
+    assert "get_ticket" in result["final_text"]
+    assert "already been called 2 times" in result["final_text"]
+    assert "NOT run" in result["final_text"]
 
 
 def test_limit_also_counts_requests_inside_one_reply(monkeypatch):
     calls = []
+    search_calls = []
     monkeypatch.setitem(agent.TOOL_FUNCTIONS, "get_ticket", make_spy_tool(calls, "FAKE"))
+    monkeypatch.setitem(agent.TOOL_FUNCTIONS, "search_tickets", make_spy_tool(search_calls, "FAKE"))
     client = FakeClient([
         make_tool_calls_reply([
             ("get_ticket", {"ticket_id": 1}, "call_1"),
             ("get_ticket", {"ticket_id": 2}, "call_2"),
             ("get_ticket", {"ticket_id": 3}, "call_3"),
+            ("search_tickets", {"query": "password"}, "call_4"),
         ]),
-        make_text_reply("Done.", tokens=10),
+        make_text_reply("must never be reached", tokens=10),
     ])
 
     result = run_limited(client, max_tool_calls=2)
 
     assert calls == [{"ticket_id": 1}, {"ticket_id": 2}]
     assert tool_results(result)["call_3"] == make_tool_limit_message("get_ticket", 2)
+    assert result["stop_reason"] == "tool_call_limit"
+    assert len(client.completions.messages_sent) == 1
+    # A request after the blocked one, in the same reply, is not run either.
+    assert search_calls == []
+    assert result["iteration_records"][0]["tool_calls"][3]["result"] is None
 
 
 # ---------- D. Separate counters ----------
@@ -224,8 +233,8 @@ def test_each_tool_has_its_own_counter(monkeypatch):
         make_tool_calls_reply([("get_ticket", {"ticket_id": 20}, "call_2")]),
         # get_ticket has now used its 2 calls; search_tickets has used none.
         make_tool_calls_reply([
-            ("get_ticket", {"ticket_id": 20}, "call_3"),
-            ("search_tickets", {"query": "password"}, "call_4"),
+            ("search_tickets", {"query": "password"}, "call_3"),
+            ("search_tickets", {"query": "invoice"}, "call_4"),
         ]),
         make_text_reply("Done.", tokens=10),
     ])
@@ -234,10 +243,12 @@ def test_each_tool_has_its_own_counter(monkeypatch):
 
     results = tool_results(result)
     assert len(get_ticket_calls) == 2
-    assert results["call_3"] == make_tool_limit_message("get_ticket", 2)
-    # get_ticket being at its limit did not block search_tickets.
-    assert search_calls == [{"query": "password"}]
+    # get_ticket being at its limit did not block search_tickets, and did
+    # not stop the run, because get_ticket was not asked for again.
+    assert search_calls == [{"query": "password"}, {"query": "invoice"}]
+    assert results["call_3"] == "FAKE"
     assert results["call_4"] == "FAKE"
+    assert result["stop_reason"] == "final_answer"
 
 
 # ---------- E. State-changing tools ----------
@@ -259,8 +270,10 @@ def test_send_reply_limit_is_checked_before_the_approval_gate():
     results = tool_results(result)
     assert results["call_1"] == REJECTION_MESSAGE
     assert results["call_2"] == REJECTION_MESSAGE
-    # ...and the third was blocked before the human was even asked.
+    # ...and the third was blocked before the human was even asked, which
+    # stopped the run.
     assert results["call_3"] == make_tool_limit_message("send_reply", 2)
+    assert result["stop_reason"] == "tool_call_limit"
     assert count_replies() == 0
     assert ticket_status(20) == "open"
 
@@ -280,6 +293,7 @@ def test_approved_send_reply_still_runs_within_the_limit():
     # The second request is over the limit: not shown to the human, not sent.
     assert len(fake_input.questions) == 1
     assert results["call_2"] == make_tool_limit_message("send_reply", 1)
+    assert result["stop_reason"] == "tool_call_limit"
     assert count_replies() == 1
 
 
@@ -295,10 +309,11 @@ def test_escalate_limit_is_checked_before_the_approval_gate():
 
     results = tool_results(result)
     assert results["call_1"] == ESCALATION_REJECTION_MESSAGE
-    # Blocked without asking the human, and it did NOT end the run.
+    # Blocked without asking the human. The run stopped because of the
+    # limit, not because the ticket was escalated: nothing was escalated.
     assert len(fake_input.questions) == 1
     assert results["call_2"] == make_tool_limit_message("escalate", 1)
-    assert result["stop_reason"] == "final_answer"
+    assert result["stop_reason"] == "tool_call_limit"
     assert count_escalations() == 0
     assert ticket_status(25) == "open"
 

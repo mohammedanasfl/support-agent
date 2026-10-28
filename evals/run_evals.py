@@ -168,7 +168,8 @@ def tool_really_ran(tool_call):
     output = tool_call["result"]
     if output is None or output.startswith("Error:"):
         return False
-    if output == REJECTION_MESSAGE or output == ESCALATION_REJECTION_MESSAGE:
+    # A rejected reply may have the human's feedback after REJECTION_MESSAGE.
+    if output.startswith(REJECTION_MESSAGE) or output == ESCALATION_REJECTION_MESSAGE:
         return False
     return True
 

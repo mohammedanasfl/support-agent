@@ -66,6 +66,15 @@
 #    says "handle" and the ticket needs a human (a recommendation is not
 #    enough then); otherwise only recommend it, and the reply must not
 #    promise that anyone will look at the case.
+#
+# 8. A rejected reply is revised, not reported (found in a Part 5 run).
+#    On ticket 18 the human rejected a reply, and the model gave a final
+#    answer whose Next step was "propose a revised reply", instead of
+#    proposing one. Nothing said what to do after a rejection, and "if the
+#    human rejected it, say that it was not done" read like "stop and
+#    report". So the send_reply entry now says to call send_reply again with
+#    a revision. The per-tool limit in agent.py still stops a run in which
+#    the human keeps rejecting.
 
 # ---- Runtime prompt: everything below is sent to the model on every call ----
 
@@ -137,6 +146,10 @@ send_reply
 - Use it only when the task asks you to reply, respond, send a response, or
   use send_reply. Writing the reply or the tool name in your answer does not
   send anything.
+- If the human rejects a reply, the reply is not done yet: call send_reply
+  again with a revised reply that fixes what the human's feedback names, or,
+  with no feedback, anything in it that breaks these rules. Do not give a
+  final answer instead, and do not escalate only because a reply was rejected.
 
 escalate
 - Use it when the task asks you to escalate, or asks you to handle a ticket
