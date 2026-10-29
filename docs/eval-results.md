@@ -2,11 +2,12 @@
 
 Before and after numbers for one change: **one rule for when to escalate**.
 
-The full report of the final evaluation run is in [`evals/eval.md`](../evals/eval.md).
+The report of the current evaluation run is in [`evals/eval.md`](../evals/eval.md).
 
 ## How it was measured
 
-- The same 12 cases from `evals/test_set.py`, 3 runs each (36 runs per version).
+- The same 12 cases from the test set at that time, 3 runs each (36 runs per
+  version).
 - Model: `gemini-3.5-flash-lite`.
 - The real agent loop, tools, guardrails and prompt, with a fresh evaluation
   database for every run (`python evals/run_evals.py`).
@@ -94,10 +95,11 @@ Two later changes followed. The output format now says that for a "handle"
 task that needs a human, `escalate` is one of the actions to finish before the
 final answer (this fixed the remaining "handle" failures, including ticket
 25), and the `send_reply` message description now says how to acknowledge the
-customer without claiming actions. In the final evaluation run, all 36
-decisions and all 36 trajectories were correct, and 31 of 36 runs passed every
-check. The remaining failures are in
-reply wording, not decisions. See [`evals/eval.md`](../evals/eval.md).
+customer without claiming actions. In the evaluation run after those changes,
+all 36 decisions and all 36 trajectories were correct, and 31 of 36 runs
+passed every check; the remaining failures were in reply wording, not
+decisions. The test set has since been changed to 10 cases, run once each;
+see [`evals/eval.md`](../evals/eval.md) for the current results.
 
 ## Limits of this comparison
 

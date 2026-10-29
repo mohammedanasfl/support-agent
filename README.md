@@ -35,7 +35,7 @@ src/support_desk/   The agent package
   db.py             SQLite access
 prompts/            The system prompt (system_prompt.py)
 scripts/            seed.py, check_key.py, trace_viewer.py
-evals/              test_set.py (12 cases), run_evals.py (runner), eval.md (report)
+evals/              test_set.py (10 cases), run_evals.py (runner), eval.md (report)
 docs/               Tool description note, injection notes, tracing note, eval results
 data/               SQLite database (generated, not committed)
 traces/             Run traces (generated, not committed)
@@ -98,11 +98,11 @@ after, and every dropped tool call with its arguments and result).
 python evals/run_evals.py
 ```
 
-Each of the 12 cases in `evals/test_set.py` runs 3 times with the real agent,
-each time on a fresh temporary database. Proposals are approved automatically
-by the eval approver. Eval traces go to `traces/eval_runs.jsonl`. A full run
-makes about 120 model calls (the Gemini free tier allows 500 requests a day
-for this model).
+Each of the 10 cases in `evals/test_set.py` runs once with the real agent, on
+a fresh temporary database. Proposals are approved automatically by the eval
+approver. Eval traces go to `traces/eval_runs.jsonl`. A full run makes about
+30 model calls (the Gemini free tier allows 500 requests a day for this
+model).
 
 ## Notes and results
 

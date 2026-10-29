@@ -34,9 +34,9 @@ approval gates, limits and config. The runner only does five things around it:
    checked: decisions, tools, tool order, arguments and the presence of key
    facts or known mistakes. Exact wording is never compared.
 
-5. Several runs per case (RUNS_PER_CASE). The model does not always make the
-   same choice for the same goal, so one run cannot tell a real improvement
-   from chance. The report shows how many runs of each case passed.
+5. RUNS_PER_CASE runs per case: 1, so the set is executed once, as Part 8
+   asks. The model does not always make the same choice for the same goal,
+   so raising it shows whether a result holds across runs.
 """
 
 import contextlib
@@ -69,7 +69,7 @@ from support_desk.guardrails import (  # noqa: E402
 from support_desk.tracing import write_run_trace  # noqa: E402
 
 # How many times every case is run. See point 5 at the top.
-RUNS_PER_CASE = 3
+RUNS_PER_CASE = 1
 
 # seed.py's seed(db_path) builds the database at any path we give it.
 SEED = runpy.run_path(str(PROJECT_ROOT / "scripts" / "seed.py"))
