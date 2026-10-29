@@ -269,6 +269,39 @@ def compact_messages(messages, keep_exchanges):
     return removed
 
 
+def describe_dropped_calls(dropped_messages):
+    """Return the tool calls in dropped_messages, each with its arguments and result.
+
+    Each one has the same keys as a tool call in the trace (tool, arguments,
+    result), so the log shows exactly what the model can no longer see.
+    compact_messages drops whole exchanges, so every request here has its
+    result here too.
+    """
+    # The result of each request, by the request's id.
+    results = {}
+    for message in dropped_messages:
+        if message["role"] == "tool":
+            results[message["tool_call_id"]] = message["content"]
+
+    dropped_calls = []
+    for message in dropped_messages:
+        for tool_call in message.get("tool_calls", []):
+            dropped_calls.append({
+                "tool": tool_call["function"]["name"],
+                "arguments": tool_call["function"]["arguments"],
+                "result": results.get(tool_call["id"]),
+            })
+    return dropped_calls
+
+
+def one_line(text, max_length):
+    """Put text on one line and cut it to max_length characters, for the log."""
+    text = " ".join(str(text).split())
+    if len(text) <= max_length:
+        return text
+    return text[:max_length - 3] + "..."
+
+
 def elapsed_ms(start_time):
     """Return the milliseconds since start_time, a value from time.perf_counter().
 
@@ -359,11 +392,34 @@ def run_agent(
         # If the model asks for many tools at once, the newest exchanges alone
         # can be longer than the threshold. Then nothing is removed, and we
         # print nothing, because nothing was compacted.
+        # compaction stays None unless messages were dropped; otherwise it
+        # records what was dropped, for the log and the trace.
+        compaction = None
         if len(messages) > context_message_threshold:
             messages_before = len(messages)
+            # A copy of the list (not of the messages), so we can still log
+            # the dropped messages after compact_messages removes them.
+            history_before = list(messages)
             removed = compact_messages(messages, context_keep_exchanges)
             if removed > 0:
-                print(f"[context] compacted {messages_before} messages -> {len(messages)} messages")
+                dropped_calls = describe_dropped_calls(history_before[2:2 + removed])
+                compaction = {
+                    "threshold": context_message_threshold,
+                    "messages_before": messages_before,
+                    "messages_after": len(messages),
+                    "dropped": dropped_calls,
+                }
+                print(
+                    f"[iter {iteration}] [context] compacting: {messages_before} messages "
+                    f"is over the threshold of {context_message_threshold}, dropped the "
+                    f"oldest {removed} -> {len(messages)} messages"
+                )
+                # The full results are in the trace; the log shows the start of each.
+                for call in dropped_calls:
+                    print(
+                        f"[iter {iteration}] [context]   dropped {call['tool']}"
+                        f"({call['arguments']}) -> {one_line(call['result'], 120)}"
+                    )
 
         # Step 1: send the whole message history to the model.
         # tools=TOOL_DECLARATIONS shows the model which tools it may ASK for.
@@ -385,6 +441,9 @@ def run_agent(
 
         # The trace record for this iteration. It is added to the list now and
         # filled in as the iteration goes on:
+        #   compaction  None, or what Step 0 dropped before this call: the
+        #               threshold, the message count before and after, and
+        #               every dropped tool call with its arguments and result
         #   tool_calls  stays None if the model asked for no tool (a final
         #               answer or an empty reply); otherwise a list, because
         #               one reply can ask for several tools
@@ -392,6 +451,7 @@ def run_agent(
         #               at the bottom of the loop
         iteration_record = {
             "iteration": iteration,
+            "compaction": compaction,
             "call_tokens": call_tokens,
             "tool_calls": None,
             "elapsed_ms": None,

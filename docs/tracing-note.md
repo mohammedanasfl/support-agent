@@ -12,6 +12,9 @@ Every time the agent finishes a run, it saves one line in
 - the final answer
 - every iteration: which tool the model asked for, the arguments, the
   result, and how long the iteration took
+- any context compaction before an iteration's model call: how many messages
+  there were before and after, and every dropped tool call with its
+  arguments and result
 
 To read a run as a tree, I use the trace viewer:
 

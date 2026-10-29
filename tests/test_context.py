@@ -1,7 +1,7 @@
 """Tests for Part 4: loading the system prompt, and context compaction."""
 
 from support_desk import agent
-from support_desk.agent import compact_messages
+from support_desk.agent import compact_messages, describe_dropped_calls
 from prompts.system_prompt import SYSTEM_PROMPT
 from tests.test_agent import FakeClient, make_text_reply, make_tool_request_reply, run_with
 
@@ -131,6 +131,20 @@ def test_compaction_does_nothing_when_there_is_little_history():
     assert len(messages) == 4
 
 
+def test_dropped_calls_are_paired_with_their_results():
+    # One exchange with two requests, then one with a single request.
+    dropped = [
+        assistant_asking("a", "b"), tool_result("a"), tool_result("b"),
+        assistant_asking("c"), tool_result("c"),
+    ]
+
+    assert describe_dropped_calls(dropped) == [
+        {"tool": "get_ticket", "arguments": "{}", "result": "result a"},
+        {"tool": "get_ticket", "arguments": "{}", "result": "result b"},
+        {"tool": "get_ticket", "arguments": "{}", "result": "result c"},
+    ]
+
+
 # ---------- Compaction inside the agent loop ----------
 
 def test_loop_compacts_when_history_passes_threshold(monkeypatch, capsys):
@@ -147,7 +161,27 @@ def test_loop_compacts_when_history_passes_threshold(monkeypatch, capsys):
     # Calls 1-3 send 2, 4, 6 messages. Before call 4 there are 8 (> 6), so the
     # history is cut to system + goal + 1 exchange = 4, and so on.
     assert client.completions.messages_sent == [2, 4, 6, 4, 6, 4]
-    assert "[context] compacted 8 messages -> 4 messages" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert (
+        "[iter 4] [context] compacting: 8 messages is over the threshold of 6, "
+        "dropped the oldest 4 -> 4 messages"
+    ) in output
+    # Each dropped tool call is logged with its arguments and result.
+    assert output.count('[iter 4] [context]   dropped get_ticket({"ticket_id": 1}) -> not it') == 2
+
+    # The trace records each compaction, with the dropped calls, in the
+    # iteration it happened before.
+    dropped_call = {"tool": "get_ticket", "arguments": '{"ticket_id": 1}', "result": "not it"}
+    compactions = [record["compaction"] for record in result["iteration_records"]]
+    assert compactions[:3] == [None, None, None]
+    assert compactions[3] == {
+        "threshold": 6,
+        "messages_before": 8,
+        "messages_after": 4,
+        "dropped": [dropped_call, dropped_call],
+    }
+    assert compactions[4] is None
+    assert compactions[5] is not None
 
     # Still one message list, and the system prompt and goal are still first.
     for message_list in client.completions.lists_sent:
@@ -165,10 +199,12 @@ def test_loop_prints_nothing_when_nothing_could_be_dropped(monkeypatch, capsys):
         make_text_reply("Done.", tokens=10),
     ])
 
-    run_with(client, context_message_threshold=3, context_keep_exchanges=1)
+    result = run_with(client, context_message_threshold=3, context_keep_exchanges=1)
 
     assert client.completions.messages_sent == [2, 4]
     assert "[context]" not in capsys.readouterr().out
+    for record in result["iteration_records"]:
+        assert record["compaction"] is None
 
 
 def test_loop_does_not_compact_below_threshold(monkeypatch, capsys):

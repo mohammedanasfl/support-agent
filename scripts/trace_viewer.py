@@ -169,6 +169,30 @@ def print_tree(run):
         print(f"{branch}Iteration {record['iteration']} "
               f"({record['call_tokens']} tokens, {record['elapsed_ms']} ms)")
 
+        # Compaction happens before the model call, so it is shown first.
+        # .get(): traces written before compaction was traced have no such key.
+        compaction = record.get("compaction")
+        if compaction is not None:
+            print(f"{inner}├── Compacted context: {compaction['messages_before']} -> "
+                  f"{compaction['messages_after']} messages (over the threshold of "
+                  f"{compaction['threshold']})")
+
+            # Every dropped tool call, shown like a tool call below.
+            # .get(): a trace written before dropped calls were saved has none.
+            dropped_calls = compaction.get("dropped", [])
+            for dropped_index, call in enumerate(dropped_calls):
+                if dropped_index == len(dropped_calls) - 1:
+                    dropped_branch = "└── "
+                    dropped_inner = "    "
+                else:
+                    dropped_branch = "├── "
+                    dropped_inner = "│   "
+
+                prefix = inner + "│   " + dropped_inner
+                print(f"{inner}│   {dropped_branch}Dropped: {call['tool']}")
+                print_branch(prefix + "├── Arguments: ", prefix + "│   ", call["arguments"])
+                print_branch(prefix + "└── Result: ", prefix + "    ", call["result"])
+
         # No tool requested. If this is the last iteration of a run that
         # stopped with a final answer, this model reply WAS the final answer.
         # Otherwise the reply was empty (stop reason empty_response).
@@ -211,13 +235,17 @@ def print_summary(run):
         print(run["final_answer"])
     print("=" * 60)
 
-    # Add up the tokens of every model call, and count every tool request.
+    # Add up the tokens of every model call, and count every tool request
+    # and every compaction.
     tokens_added_up = 0
     tool_call_count = 0
+    compaction_count = 0
     for record in run["iterations"]:
         tokens_added_up = tokens_added_up + record["call_tokens"]
         if record["tool_calls"] is not None:
             tool_call_count = tool_call_count + len(record["tool_calls"])
+        if record.get("compaction") is not None:
+            compaction_count = compaction_count + 1
 
     seconds = run["total_duration_ms"] / 1000
 
@@ -230,6 +258,7 @@ def print_summary(run):
     print(f"  Total duration:  {run['total_duration_ms']} ms ({seconds:.1f} seconds)")
     print(f"  Iterations:      {len(run['iterations'])}")
     print(f"  Tool calls:      {tool_call_count}")
+    print(f"  Compactions:     {compaction_count}")
 
 
 def main():

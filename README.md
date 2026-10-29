@@ -87,7 +87,9 @@ python scripts/trace_viewer.py traces/runs.jsonl
 ```
 
 The viewer lists the runs in the file, then prints the chosen run as a tree:
-every iteration with its tool calls, arguments, results, tokens and time.
+every iteration with its tool calls, arguments, results, tokens and time, and
+any context compaction before the iteration's model call (messages before and
+after, and every dropped tool call with its arguments and result).
 
 ## Running the evals
 
