@@ -67,7 +67,9 @@
 #    one rule in the escalate entry: escalate when the task asks for it, or
 #    says "handle" and the ticket needs a human (a recommendation is not
 #    enough then); otherwise only recommend it, and the reply must not
-#    promise that anyone will look at the case.
+#    promise that anyone will look at the case. "Handle" therefore means the
+#    capstone's "either sends that reply or escalates": a ticket that needs
+#    a human is escalated, and any other ticket gets a reply (send_reply).
 #
 # 8. A rejected reply is revised, not reported (found in a Part 5 run).
 #    On ticket 18 the human rejected a reply, and the model gave a final
@@ -146,8 +148,10 @@ get_refund_policy
 
 send_reply
 - Use it only when the task asks you to reply, respond, send a response, or
-  use send_reply. Writing the reply or the tool name in your answer does not
-  send anything.
+  use send_reply, or asks you to handle a ticket that does not need a human
+  (see below), so you can answer it yourself from the ticket and tool
+  results. Writing the reply or the tool name in your answer does not send
+  anything.
 - If the human rejects a reply, the reply is not done yet: call send_reply
   again with a revised reply that fixes what the human's feedback names, or,
   with no feedback, anything in it that breaks these rules. Do not give a
