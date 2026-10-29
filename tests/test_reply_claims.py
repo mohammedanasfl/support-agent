@@ -81,7 +81,7 @@ def test_prompt_has_one_rule_for_when_to_escalate():
     assert "Then recommending escalation is not enough: call escalate, after any reply the task asks for." in PROMPT_TEXT
     assert "a person still has to follow up with the customer" in PROMPT_TEXT
     # Every other task: only recommend it, and the reply promises no follow-up.
-    assert "the task only asks you to triage or to reply), do not call it: recommend escalation in the Next step" in PROMPT_TEXT
+    assert "the task only asks you to triage or to reply), do not call it: recommend escalation in the Summary" in PROMPT_TEXT
     assert "do not tell the customer in a reply that anyone will look at or follow up on the case" in PROMPT_TEXT
 
 

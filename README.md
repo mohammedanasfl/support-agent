@@ -13,7 +13,8 @@ LangGraph, CrewAI, smolagents, Agents SDK).
 ## What the agent does
 
 - Reads support tickets from a local SQLite database and triages them: a
-  category, a short summary, and the next step.
+  category and a short summary, which also says when a human must review
+  the ticket and why.
 - Uses six tools. Four only read data: `get_ticket`, `search_tickets`,
   `get_customer_history`, `get_refund_policy`. Two change data and only run
   after a person approves them at the terminal: `send_reply` and `escalate`.

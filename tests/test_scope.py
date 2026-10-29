@@ -129,8 +129,8 @@ def test_support_goals_without_ticket_id_run_no_tool(monkeypatch):
     for goal in SUPPORT_GOALS_WITHOUT_TICKET_ID:
         client = FakeClient([
             make_text_reply(
-                "Ticket: not provided\n\nCategory: unclear\n\nSummary: ...\n\n"
-                "Next step: Ask the user for the ticket id.",
+                "Ticket: not provided\n\nCategory: unclear\n\nSummary: ... "
+                "Please give the ticket id.",
                 tokens=10,
             ),
         ])

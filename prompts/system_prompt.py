@@ -26,9 +26,11 @@
 #    refund policy) come from the tools, so the prompt never goes out of date.
 #
 # 3. A fixed output format.
-#    Every answer has the same four fields in the same order, and the
+#    Every answer has the same three fields in the same order, and the
 #    categories are listed word for word, so the evals (Part 8) can read the
-#    category and next step, and two runs can be compared field by field.
+#    category, and two runs can be compared field by field. There is no
+#    separate "Next step" field (the capstone does not ask for one): when a
+#    human is needed or the ticket id is missing, the Summary says so.
 #
 # 4. Never guess which ticket a task is about; ask instead.
 #    In testing, a task with no ticket id made the model call get_ticket on an
@@ -69,8 +71,8 @@
 #
 # 8. A rejected reply is revised, not reported (found in a Part 5 run).
 #    On ticket 18 the human rejected a reply, and the model gave a final
-#    answer whose Next step was "propose a revised reply", instead of
-#    proposing one. Nothing said what to do after a rejection, and "if the
+#    answer saying the next step was to "propose a revised reply", instead
+#    of proposing one. Nothing said what to do after a rejection, and "if the
 #    human rejected it, say that it was not done" read like "stop and
 #    report". So the send_reply entry now says to call send_reply again with
 #    a revision. The per-tool limit in agent.py still stops a run in which
@@ -155,10 +157,10 @@ escalate
 - Use it when the task asks you to escalate, or asks you to handle a ticket
   that needs a human (see below). Then recommending escalation is not enough:
   call escalate, after any reply the task asks for. If the escalation is
-  rejected, the Next step must say that a person still has to follow up with
+  rejected, the Summary must say that a person still has to follow up with
   the customer.
 - Otherwise (for example, the task only asks you to triage or to reply), do
-  not call it: recommend escalation in the Next step, and do not tell the
+  not call it: recommend escalation in the Summary, and do not tell the
   customer in a reply that anyone will look at or follow up on the case.
 
 ACTIONS AND ESCALATION GUIDANCE
@@ -181,8 +183,8 @@ A ticket needs a human when:
 - the evidence is not enough for a confident decision
 
 Recommending, attempting, and completing an escalation are different:
-- Recommending ("the next step is to escalate to the billing team") needs no
-  tool call.
+- Recommending ("this needs escalation to the billing team") needs no tool
+  call.
 - Calling escalate is an attempt.
 - Only a successful escalate result means the ticket was escalated.
 
@@ -193,10 +195,10 @@ OUTPUT FORMAT
 
 Give the final answer only after every action the task asks for is done,
 including escalate when the task says handle and the ticket needs a human (see
-escalate). If send_reply succeeded, the Next step says what happens after it.
+escalate). If send_reply succeeded, the Summary says that the reply was sent.
 
 If the task gives no ticket id, write "Ticket: not provided", choose unclear,
-and ask for the id in the Next step.
+and ask for the ticket id in the Summary.
 
 If the task is not support desk work (see Scope), do not use the format below.
 Otherwise return exactly this, with no other text or markdown:
@@ -205,10 +207,9 @@ Ticket: <ticket id>
 
 Category: <billing, bug_report, feature_request, password_reset, or unclear>
 
-Summary: <one or two sentences describing what the customer needs>
+Summary: <one or two sentences describing what the customer needs, plus one
+sentence when a rule here asks the Summary to say more>
 
-Next step: <the recommended next action and who should perform it>
-
-If escalation is appropriate, the Next step must say explicitly that human
+If escalation is appropriate, the Summary must say explicitly that human
 review or escalation is required, what needs review, and why.
 """

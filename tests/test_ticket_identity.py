@@ -155,7 +155,7 @@ def test_goal_without_ticket_id_runs_no_ticket_tool():
     client = FakeClient([
         make_text_reply(
             "Ticket: not provided\n\nCategory: unclear\n\nSummary: The user wants a refund "
-            "but gave no ticket id.\n\nNext step: Ask the user for the ticket id.",
+            "but gave no ticket id. Please give the ticket id.",
             tokens=10,
         ),
     ])
