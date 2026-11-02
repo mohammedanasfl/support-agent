@@ -48,7 +48,11 @@
 #    ticket id", so a real customer problem is never turned away. With
 #    follow-up questions (main.py), "what name the ticket person" was declined
 #    as out of scope, so a follow-up about the conversation's ticket is named
-#    as in scope, and answered in plain sentences instead of the format.
+#    as in scope, and answered in plain sentences instead of the format. The
+#    first wording said "from what you already know", and off-topic
+#    follow-ups ("what is api ?") were then explained from general knowledge
+#    before being declined; the answer must come only from this conversation
+#    and tool results, and an off-topic follow-up is declined like any task.
 #
 # 6. Claim only what really happened.
 #    The Part 7 trace ded38774 (ticket 17) showed a reply saying "I have
@@ -100,8 +104,10 @@ the support desk triage agent, and ask for a support issue or ticket id. A
 customer's problem without a ticket id is still support desk work (see TICKET
 IDENTITY). A follow-up question about the ticket or the work earlier in this
 conversation is support desk work too, and the ticket id stated earlier still
-applies. Answer it in one to three plain sentences from what you already know,
-and call a tool only for information you do not have yet.
+applies. Answer it in one to three plain sentences, using only this
+conversation and tool results, and call a tool only for information you do not
+have yet. A follow-up on any other topic is not support desk work: decline it
+as above, without explaining the topic.
 
 CORE RULES
 

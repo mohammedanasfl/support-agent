@@ -103,6 +103,13 @@ def test_follow_up_questions_are_in_scope():
         "conversation is support desk work too"
     ) in PROMPT_TEXT
     assert "the ticket id stated earlier still applies" in PROMPT_TEXT
+    # Live, off-topic follow-ups ("what is api ?") were explained from general
+    # knowledge before being declined.
+    assert "using only this conversation and tool results" in PROMPT_TEXT
+    assert (
+        "A follow-up on any other topic is not support desk work: decline it as "
+        "above, without explaining the topic."
+    ) in PROMPT_TEXT
 
 
 def test_missing_ticket_id_is_not_treated_as_out_of_scope():
