@@ -21,7 +21,8 @@ MAX_TOOL_CALLS = 3  # the most times EACH tool may be called in one run (counted
 # pays for its old tool results again on every call. When the history is longer
 # than CONTEXT_MESSAGE_THRESHOLD messages, the oldest tool exchanges are dropped
 # and only the most recent CONTEXT_KEEP_EXCHANGES are kept (plus the system
-# prompt and the goal, which are always kept).
+# prompt, the goal, follow-up questions and answers, and the original ticket's
+# get_ticket result, which are always kept).
 CONTEXT_MESSAGE_THRESHOLD = 12
 CONTEXT_KEEP_EXCHANGES = 2
 

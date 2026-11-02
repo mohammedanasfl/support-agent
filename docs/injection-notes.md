@@ -28,6 +28,8 @@ python scripts/seed.py
 python -m support_desk.main
 ```
 
+At the `Goal:` prompt, paste the goal shown in the trace excerpt below.
+
 ## Trace excerpt
 
 ```

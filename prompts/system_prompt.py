@@ -45,7 +45,10 @@
 #    model first decides whether the task is support desk work at all; if not,
 #    it calls no tool and answers with a short redirect. A support request
 #    that only lacks a ticket id is still in scope and gets "ask for the
-#    ticket id", so a real customer problem is never turned away.
+#    ticket id", so a real customer problem is never turned away. With
+#    follow-up questions (main.py), "what name the ticket person" was declined
+#    as out of scope, so a follow-up about the conversation's ticket is named
+#    as in scope, and answered in plain sentences instead of the format.
 #
 # 6. Claim only what really happened.
 #    The Part 7 trace ded38774 (ticket 17) showed a reply saying "I have
@@ -95,7 +98,10 @@ knowledge, programming help, the weather, or a joke), do not answer it and do
 not call any tool. Say in one or two sentences that it is outside the scope of
 the support desk triage agent, and ask for a support issue or ticket id. A
 customer's problem without a ticket id is still support desk work (see TICKET
-IDENTITY).
+IDENTITY). A follow-up question about the ticket or the work earlier in this
+conversation is support desk work too, and the ticket id stated earlier still
+applies. Answer it in one to three plain sentences from what you already know,
+and call a tool only for information you do not have yet.
 
 CORE RULES
 
@@ -204,7 +210,8 @@ escalate). If send_reply succeeded, the Summary says that the reply was sent.
 If the task gives no ticket id, write "Ticket: not provided", choose unclear,
 and ask for the ticket id in the Summary.
 
-If the task is not support desk work (see Scope), do not use the format below.
+If the task is not support desk work, or is a follow-up question (see Scope),
+do not use the format below.
 Otherwise return exactly this, with no other text or markdown:
 
 Ticket: <ticket id>

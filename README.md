@@ -26,7 +26,7 @@ LangGraph, CrewAI, smolagents, Agents SDK).
 
 ```
 src/support_desk/   The agent package
-  main.py           Runs the agent once on the GOAL written in this file
+  main.py           Asks for a goal in the terminal, then for follow-up questions
   config.py         Model, API key from the environment, run limits
   agent.py          The hand-written agent loop, including context compaction
   tools.py          The six tools and their descriptions
@@ -66,10 +66,15 @@ python scripts/check_key.py
 
 ```bash
 python scripts/seed.py           # build (or reset) the database
-python -m support_desk.main      # run the agent on the GOAL set in main.py
+python -m support_desk.main      # type a goal, e.g. "Please handle ticket 24."
 ```
 
-- To change the task, edit `GOAL` in `src/support_desk/main.py`.
+- Type the goal at the `Goal:` prompt. When the run ends, the program asks
+  for a follow-up question. A follow-up continues the same conversation: the
+  agent gets the whole history so far (the ticket it read, the reply it sent,
+  its answer) and answers with that context. Press Enter on an empty line,
+  or Ctrl+D, to finish. Each goal and each follow-up is saved as its own
+  trace, and the limits apply to each one.
 - When the agent wants to send a reply or escalate, it stops and shows the
   proposal and the tools that really ran so far. Type `y` to approve; anything
   else rejects it, and the agent is told it was not done. When rejecting a

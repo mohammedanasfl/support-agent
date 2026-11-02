@@ -89,7 +89,20 @@ def test_out_of_scope_tasks_get_no_answer_and_no_tools():
     assert "outside the scope of the support desk triage agent" in PROMPT_TEXT
     assert "ask for a support issue or ticket id" in PROMPT_TEXT
     # The redirect replaces the ticket format, which only fits support work.
-    assert "If the task is not support desk work (see Scope), do not use the format below" in PROMPT_TEXT
+    assert (
+        "If the task is not support desk work, or is a follow-up question (see Scope), "
+        "do not use the format below"
+    ) in PROMPT_TEXT
+
+
+def test_follow_up_questions_are_in_scope():
+    # Live, "what name the ticket person" (a follow-up about the ticket) was
+    # declined as out of scope.
+    assert (
+        "A follow-up question about the ticket or the work earlier in this "
+        "conversation is support desk work too"
+    ) in PROMPT_TEXT
+    assert "the ticket id stated earlier still applies" in PROMPT_TEXT
 
 
 def test_missing_ticket_id_is_not_treated_as_out_of_scope():

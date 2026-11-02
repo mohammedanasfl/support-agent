@@ -8,14 +8,18 @@ from tests.test_agent import FakeClient, make_text_reply, make_tool_request_repl
 
 # ---------- Helpers that build message lists by hand ----------
 
-def assistant_asking(*call_ids):
-    """An assistant message that asks for one tool call per id."""
+def assistant_asking(*call_ids, tool="search_tickets"):
+    """An assistant message that asks for one call of tool per id.
+
+    The default is not get_ticket, because compaction always keeps the first
+    get_ticket exchange (see test_compaction_never_drops_the_original_ticket).
+    """
     tool_calls = []
     for call_id in call_ids:
         tool_calls.append({
             "id": call_id,
             "type": "function",
-            "function": {"name": "get_ticket", "arguments": "{}"},
+            "function": {"name": tool, "arguments": "{}"},
         })
     return {"role": "assistant", "content": None, "tool_calls": tool_calls}
 
@@ -131,6 +135,27 @@ def test_compaction_does_nothing_when_there_is_little_history():
     assert len(messages) == 4
 
 
+def test_compaction_never_drops_the_original_ticket():
+    # The first get_ticket exchange is the oldest, but it is kept; a later
+    # get_ticket exchange is dropped like any other.
+    messages = start_messages()
+    messages.append(assistant_asking("ticket", tool="get_ticket"))
+    messages.append(tool_result("ticket"))
+    messages.append(assistant_asking("a"))
+    messages.append(tool_result("a"))
+    messages.append(assistant_asking("again", tool="get_ticket"))
+    messages.append(tool_result("again"))
+    messages.append(assistant_asking("b"))
+    messages.append(tool_result("b"))
+
+    removed = compact_messages(messages, keep_exchanges=1)
+
+    assert removed == 4
+    assert roles_and_ids(messages) == [
+        "system", "user", "assistant ticket", "tool ticket", "assistant b", "tool b",
+    ]
+
+
 def test_dropped_calls_are_paired_with_their_results():
     # One exchange with two requests, then one with a single request.
     dropped = [
@@ -139,9 +164,9 @@ def test_dropped_calls_are_paired_with_their_results():
     ]
 
     assert describe_dropped_calls(dropped) == [
-        {"tool": "get_ticket", "arguments": "{}", "result": "result a"},
-        {"tool": "get_ticket", "arguments": "{}", "result": "result b"},
-        {"tool": "get_ticket", "arguments": "{}", "result": "result c"},
+        {"tool": "search_tickets", "arguments": "{}", "result": "result a"},
+        {"tool": "search_tickets", "arguments": "{}", "result": "result b"},
+        {"tool": "search_tickets", "arguments": "{}", "result": "result c"},
     ]
 
 
@@ -159,15 +184,16 @@ def test_loop_compacts_when_history_passes_threshold(monkeypatch, capsys):
     )
 
     # Calls 1-3 send 2, 4, 6 messages. Before call 4 there are 8 (> 6), so the
-    # history is cut to system + goal + 1 exchange = 4, and so on.
-    assert client.completions.messages_sent == [2, 4, 6, 4, 6, 4]
+    # history is cut to system + goal + the first get_ticket exchange (the
+    # original ticket, always kept) + the newest exchange = 6, and so on.
+    assert client.completions.messages_sent == [2, 4, 6, 6, 6, 6]
     output = capsys.readouterr().out
     assert (
         "[iter 4] [context] compacting: 8 messages is over the threshold of 6, "
-        "dropped the oldest 4 -> 4 messages"
+        "dropped the oldest 2 -> 6 messages"
     ) in output
     # Each dropped tool call is logged with its arguments and result.
-    assert output.count('[iter 4] [context]   dropped get_ticket({"ticket_id": 1}) -> not it') == 2
+    assert output.count('[iter 4] [context]   dropped get_ticket({"ticket_id": 1}) -> not it') == 1
 
     # The trace records each compaction, with the dropped calls, in the
     # iteration it happened before.
@@ -177,17 +203,20 @@ def test_loop_compacts_when_history_passes_threshold(monkeypatch, capsys):
     assert compactions[3] == {
         "threshold": 6,
         "messages_before": 8,
-        "messages_after": 4,
-        "dropped": [dropped_call, dropped_call],
+        "messages_after": 6,
+        "dropped": [dropped_call],
     }
-    assert compactions[4] is None
+    assert compactions[4] is not None
     assert compactions[5] is not None
 
-    # Still one message list, and the system prompt and goal are still first.
+    # Still one message list, and the system prompt, the goal and the original
+    # ticket are still first.
     for message_list in client.completions.lists_sent:
         assert message_list is result["messages"]
     assert result["messages"][0]["content"] == "test prompt"
     assert result["messages"][1]["content"] == "Look up ticket 20."
+    assert result["messages"][2]["tool_calls"][0]["function"]["name"] == "get_ticket"
+    assert result["messages"][3]["content"] == "not it"
 
 
 def test_loop_prints_nothing_when_nothing_could_be_dropped(monkeypatch, capsys):

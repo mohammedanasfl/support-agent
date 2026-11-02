@@ -232,41 +232,107 @@ def compact_messages(messages, keep_exchanges):
     """Drop the oldest tool exchanges from messages, changing the list in place.
 
     messages[0] is the system prompt and messages[1] is the goal. Both are
-    always kept. Everything after them is a series of tool exchanges. One
-    exchange is an assistant message that asked for tools, followed by one
-    "tool" message for each request:
+    always kept. After them come tool exchanges. One exchange is an assistant
+    message that asked for tools, followed by one "tool" message for each
+    request:
 
         [system] [goal] [assistant, tool] [assistant, tool, tool] [assistant, tool]
                         |-- exchange 1 -| |------ exchange 2 ---| |-- exchange 3 -|
 
-    Only the newest keep_exchanges exchanges are kept (keep_exchanges must be
-    at least 1). An exchange is kept or
+    In a conversation with follow-up questions (see main.py), the history also
+    holds each follow-up question and each earlier final answer. Those are
+    never dropped either: only tool exchanges are.
+
+    The first exchange that called get_ticket is never dropped: it holds the
+    original ticket and its customer, which every later step and every
+    follow-up question is about. In testing, dropping it made the model fetch
+    the ticket again and again, and decline a follow-up question about the
+    customer's name.
+
+    Of the other exchanges, only the newest keep_exchanges are kept
+    (keep_exchanges must be at least 1). An exchange is kept or
     dropped as a whole: the API rejects a tool message whose request is
     missing, and a request without its result would confuse the model.
 
-    What is dropped can be fetched again: the tools only read data, and the
-    goal (which names the ticket) is never dropped.
+    What is dropped can be fetched again: the tools only read data.
 
     Returns how many messages were removed.
     """
-    # Find where each exchange starts: every assistant message after the goal.
-    exchange_starts = []
-    for index in range(2, len(messages)):
-        if messages[index]["role"] == "assistant":
-            exchange_starts.append(index)
+    # Find each exchange as (start, end): an assistant message that asked for
+    # tools, up to (not including) the first message after its tool results.
+    # The first one that called get_ticket is kept aside and never dropped.
+    exchanges = []
+    ticket_found = False
+    index = 2
+    while index < len(messages):
+        message = messages[index]
+        if message["role"] == "assistant" and message.get("tool_calls"):
+            start = index
+            index = index + 1
+            while index < len(messages) and messages[index]["role"] == "tool":
+                index = index + 1
+
+            tool_names = []
+            for tool_call in message["tool_calls"]:
+                tool_names.append(tool_call["function"]["name"])
+            if "get_ticket" in tool_names and not ticket_found:
+                ticket_found = True  # the original ticket: not added, so never dropped
+            else:
+                exchanges.append((start, index))
+        else:
+            index = index + 1
 
     # Not more exchanges than we want to keep: nothing to drop.
-    if len(exchange_starts) <= keep_exchanges:
+    if len(exchanges) <= keep_exchanges:
         return 0
 
-    # The first message to keep is the start of the oldest exchange we keep.
-    # Everything between the goal and that message is removed. "del" with a
-    # slice removes those positions from the list itself, so this is still the
-    # same list object that the rest of the loop is using.
-    first_kept = exchange_starts[len(exchange_starts) - keep_exchanges]
-    removed = first_kept - 2
-    del messages[2:first_kept]
+    # Remove every exchange except the newest keep_exchanges. They are removed
+    # newest first, so removing one does not move the positions of the older
+    # ones still to remove. "del" with a slice removes those positions from
+    # the list itself, so this is still the same list object that the rest of
+    # the loop is using.
+    removed = 0
+    for start, end in reversed(exchanges[:len(exchanges) - keep_exchanges]):
+        del messages[start:end]
+        removed = removed + (end - start)
     return removed
+
+
+# The result given to a tool request that never ran because the run ended
+# first (see close_unanswered_tool_calls).
+NOT_RUN_MESSAGE = "Not run: the run ended before this request was run."
+
+
+def close_unanswered_tool_calls(messages):
+    """Give each tool request in the model's last reply a result, if it has none.
+
+    A run can end before every request in a reply has run: after a
+    successful escalation or a tool's call limit (the later requests in that
+    reply), or at the token limit (all of them). The API rejects a history in
+    which a request has no "tool" message, so before a follow-up question
+    continues the history, each unanswered request gets one saying it was not
+    run. Only the last reply can have unanswered requests: the requests of
+    every earlier reply all ran before the model was called again.
+    """
+    last_reply_index = None
+    for index, message in enumerate(messages):
+        if message["role"] == "assistant":
+            last_reply_index = index
+    if last_reply_index is None:
+        return
+
+    answered_ids = []
+    for message in messages[last_reply_index + 1:]:
+        if message["role"] == "tool":
+            answered_ids.append(message["tool_call_id"])
+
+    for tool_call in messages[last_reply_index].get("tool_calls", []):
+        if tool_call["id"] not in answered_ids:
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call["id"],
+                "content": NOT_RUN_MESSAGE,
+            })
 
 
 def describe_dropped_calls(dropped_messages):
@@ -339,6 +405,7 @@ def run_agent(
     context_message_threshold,
     context_keep_exchanges,
     input_function=input,
+    history=None,
 ):
     """Run the agent loop on one goal and return a result dictionary.
 
@@ -350,6 +417,12 @@ def run_agent(
 
     input_function reads the human's answer when send_reply or escalate needs
     approval. It is Python's built-in input() unless a test passes a fake one.
+
+    history is the "messages" list of an earlier result, or None. When it is
+    given, goal is a follow-up question in the same conversation: it is added
+    to the end of that list (whose first message is already the system
+    prompt), so the model sees everything said and done before. The limits
+    and the per-tool counts start again for each run.
     """
 
     # The ONE message list for the whole run. It starts with the system
@@ -357,10 +430,16 @@ def run_agent(
     # appended to this same list, and the whole list is sent on every call.
     # When it grows too long, compaction (Step 0) removes old entries from
     # this same list; it never makes a new one.
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": goal},
-    ]
+    # A follow-up question continues the earlier run's list instead.
+    if history is None:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": goal},
+        ]
+    else:
+        messages = history
+        close_unanswered_tool_calls(messages)
+        messages.append({"role": "user", "content": goal})
 
     total_tokens = 0
 
@@ -399,10 +478,16 @@ def run_agent(
             messages_before = len(messages)
             # A copy of the list (not of the messages), so we can still log
             # the dropped messages after compact_messages removes them.
-            history_before = list(messages)
+            list_before = list(messages)
             removed = compact_messages(messages, context_keep_exchanges)
             if removed > 0:
-                dropped_calls = describe_dropped_calls(history_before[2:2 + removed])
+                # The dropped messages are the ones no longer in the list.
+                # "is" compares the message objects themselves, not their text.
+                dropped = []
+                for message in list_before:
+                    if not any(message is kept for kept in messages):
+                        dropped.append(message)
+                dropped_calls = describe_dropped_calls(dropped)
                 compaction = {
                     "threshold": context_message_threshold,
                     "messages_before": messages_before,
