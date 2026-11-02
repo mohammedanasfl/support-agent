@@ -33,10 +33,11 @@ from support_desk.guardrails import (
     REJECTION_MESSAGE,
     ask_human_to_approve_escalation,
     ask_human_to_approve_reply,
+    make_other_customer_message,
     make_rejection_message,
     make_tool_limit_message,
 )
-from support_desk.tools import TOOL_DECLARATIONS, TOOL_FUNCTIONS
+from support_desk.tools import TOOL_DECLARATIONS, TOOL_FUNCTIONS, find_other_customers_details
 
 
 def run_tool(tool_name, arguments_json):
@@ -102,6 +103,10 @@ def run_send_reply_with_approval(arguments_json, input_function, actions_done=No
 
     The check is here in Python code, so the model cannot skip it, whatever
     the prompt or a ticket says.
+
+    Before the human is asked, a reply that contains another customer's name
+    or email is blocked: send_reply is not run, and the model gets an error
+    naming what to remove (found with a Part 6 injection test).
     """
     # We need the ticket id and message to show the human, so we read the
     # arguments here. If they cannot be read, there is nothing to show, and
@@ -123,6 +128,14 @@ def run_send_reply_with_approval(arguments_json, input_function, actions_done=No
     message = fix_escaped_line_breaks(message)
     if "message" in tool_args:
         tool_args["message"] = message
+
+    # Another customer's details never go into a reply, whatever the task
+    # says. This is checked in code, so it does not depend on the model or on
+    # the human noticing them.
+    other_details = find_other_customers_details(ticket_id, message)
+    if other_details:
+        print("[guardrail] the reply contains another customer's details: send_reply was NOT run")
+        return make_other_customer_message(other_details)
 
     approved, feedback = ask_human_to_approve_reply(ticket_id, message, input_function, actions_done)
 

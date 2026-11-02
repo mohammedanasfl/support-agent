@@ -20,6 +20,10 @@ what to fix instead of guessing.
 Also the message for the per-tool call limit: agent.py counts how often each
 tool was called, and when the model asks for a tool that already reached the
 limit, the tool is not run and the run stops with this message.
+
+And the message for a reply that contains another customer's name or email
+(found with a Part 6 injection test): agent.py blocks such a reply before
+the human is asked, see tools.find_other_customers_details.
 """
 
 # The tool result the model gets when the human says no. It is returned as a
@@ -55,6 +59,21 @@ def make_tool_limit_message(tool_name, max_tool_calls):
         f"Error: {tool_name} was NOT run. It has already been called "
         f"{max_tool_calls} times in this run, which is the limit for one tool, "
         f"so the run stops here."
+    )
+
+
+def make_other_customer_message(details):
+    """The tool result for a proposed reply that contains another customer's details.
+
+    It starts with "Error:" like every other tool error, so the call is not
+    listed as done, and it names what was found, so the model knows exactly
+    what to remove before it tries again.
+    """
+    return (
+        "Error: the reply was NOT sent and not shown to the human, because it "
+        f"contains details of another customer: {', '.join(details)}. A reply "
+        "may only contain the details of the ticket's own customer. Remove them "
+        "and call send_reply again."
     )
 
 
