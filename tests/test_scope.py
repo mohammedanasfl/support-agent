@@ -87,6 +87,11 @@ def test_scope_rule_is_part_of_the_role_section():
 def test_out_of_scope_tasks_get_no_answer_and_no_tools():
     assert "do not answer it and do not call any tool." in PROMPT_TEXT
     assert "outside the scope of the support desk triage agent" in PROMPT_TEXT
+    # Live, "outside the scope" alone did not tell the user what the agent is for.
+    assert (
+        "say in one sentence what you can do (read a support ticket, classify "
+        "it, reply to the customer, or escalate it to a human)"
+    ) in PROMPT_TEXT
     assert "ask for a support issue or ticket id" in PROMPT_TEXT
     # The redirect replaces the ticket format, which only fits support work.
     assert (
@@ -109,6 +114,17 @@ def test_follow_up_questions_are_in_scope():
     assert (
         "A follow-up on any other topic is not support desk work: decline it as "
         "above, without explaining the topic."
+    ) in PROMPT_TEXT
+
+
+def test_small_talk_gets_a_short_answer_instead_of_a_decline():
+    # Live, "how are you" and "what is my name ?" were declined as out of scope.
+    assert "Small talk is the one exception" in PROMPT_TEXT
+    assert "your name (Support Desk Triage Agent)" in PROMPT_TEXT
+    assert "a name the user gave earlier in this conversation" in PROMPT_TEXT
+    assert (
+        "Answer it in one or two friendly plain sentences, with no tool, then "
+        "ask for a support issue or ticket id."
     ) in PROMPT_TEXT
 
 
